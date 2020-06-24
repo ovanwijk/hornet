@@ -446,3 +446,20 @@ type AddressWithBalance struct {
 	Address trinary.Hash `mapstructure:"address"`
 	Balance uint64       `mapstructure:"balance"`
 }
+
+///////////////// findPath ////////////////////////
+
+// GetFindPath struct
+type GetFindPath struct {
+	Command   string         `mapstructure:"command"`
+	Endpoints []trinary.Hash `mapstructure:"endpoints"`
+	Start     trinary.Hash   `mapstructure:"start"`
+}
+
+// GetFindPathReturn struct
+type GetFindPathReturn struct {
+	Transactions []trinary.Hash `json:"transactions"`
+	Branches     [][]int        `json:"branches"`
+	Vertices     [][]int        `json:"vertices"`
+	Duration     int            `json:"duration"`
+}

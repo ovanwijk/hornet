@@ -45,6 +45,10 @@ func getTimestampFromTx(transaction *transaction.Transaction) int64 {
 	return timestamp
 }
 
+func (tx *Transaction) GetAttachmentTimestamp() int64 {
+	return tx.Tx.AttachmentTimestamp
+}
+
 func (tx *Transaction) GetHash() trinary.Hash {
 	return tx.Tx.Hash
 }
