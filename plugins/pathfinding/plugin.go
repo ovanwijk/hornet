@@ -19,12 +19,12 @@ var (
 
 )
 
-func findPaths(start trinary.Hash, endpoints []*trinary.Hash) {
+func FindPaths(start trinary.Hash, endpoints []trinary.Hash) ([]string, [][]int, [][]int, string) {
 	cachedStart := tangle.GetCachedTransactionOrNil(start)
 	startTx := *cachedStart.GetTransaction()
 	sortedEndpoints := make([]ApproveeStep, 0)
 	for i := 0; i < len(endpoints); i++ {
-		cachedTx := tangle.GetCachedTransactionOrNil(*endpoints[i])
+		cachedTx := tangle.GetCachedTransactionOrNil(endpoints[i])
 		tx := *cachedTx.GetTransaction()
 		sortedEndpoints = insertSorted(sortedEndpoints, ApproveeStep{
 			0,
@@ -59,14 +59,16 @@ func findPaths(start trinary.Hash, endpoints []*trinary.Hash) {
 	})
 
 	indexCounter := 0
-
+	err := ""
 	for _, sortedEndpoint := range sortedEndpoints {
 		for _, overReachTx := range overReachQueue {
 			callQueue = insertSorted(callQueue, overReachTx)
 		}
 		overReachQueue = make([]ApproveeStep, 0)
-		callQueue, overReachQueue, localTangle = WalkTangle(callQueue, overReachQueue, sortedEndpoint, localTangle)
-
+		callQueue, overReachQueue, localTangle, err = WalkTangle(callQueue, overReachQueue, sortedEndpoint, localTangle)
+		if err != "" {
+			return nil, nil, nil, err
+		}
 		currentRef := localTangle[sortedEndpoint.TX]
 		for currentRef.Step != 0 {
 			if _, ok := resultIndex[currentRef.TxID]; !ok {
@@ -84,10 +86,11 @@ func findPaths(start trinary.Hash, endpoints []*trinary.Hash) {
 			_, edgeFound := edgeIndex[currentRef.TxID+currentRef.ShortestPath]
 			if currentRef.Step != 0 && !edgeFound {
 				edgeIndex[currentRef.TxID+currentRef.ShortestPath] = true
-				if currentRef.BoT {
-					branchesList = append(branchesList, []int{resultIndex[currentRef.ShortestPath], resultIndex[currentRef.TxID]})
-				} else {
+				if currentRef.ToB {
 					trunkList = append(trunkList, []int{resultIndex[currentRef.ShortestPath], resultIndex[currentRef.TxID]})
+				} else {
+					branchesList = append(branchesList, []int{resultIndex[currentRef.ShortestPath], resultIndex[currentRef.TxID]})
+
 				}
 			}
 
@@ -97,10 +100,10 @@ func findPaths(start trinary.Hash, endpoints []*trinary.Hash) {
 
 	// call_queue := make(sortedmap.SortedMap[int]hornet.TransactionMetadata)
 
-	return
+	return resultTxList, branchesList, trunkList, ""
 }
 
-func WalkTangle(callQueue []ApproveeStep, overReachQueue []ApproveeStep, endpoint ApproveeStep, localTangle map[string]PathReference) ([]ApproveeStep, []ApproveeStep, map[string]PathReference) {
+func WalkTangle(callQueue []ApproveeStep, overReachQueue []ApproveeStep, endpoint ApproveeStep, localTangle map[string]PathReference) ([]ApproveeStep, []ApproveeStep, map[string]PathReference, string) {
 	lowestTimestamp := endpoint.Timestamp
 
 	for _, ok := localTangle[endpoint.TX]; !ok && len(callQueue) > 0; {
@@ -110,28 +113,60 @@ func WalkTangle(callQueue []ApproveeStep, overReachQueue []ApproveeStep, endpoin
 		trunkAndBranch := []trinary.Hash{currentTx.Trunk, currentTx.Branch}
 
 		for i := 0; i < 2; i++ {
-			cachedTx := tangle.GetCachedTransactionOrNil(trunkAndBranch[i])
-			tx := *cachedTx.GetTransaction()
+			if foundTx, txFound := localTangle[trunkAndBranch[i]]; txFound {
+				if currentStep < foundTx.Step {
+					foundTx.ShortestPath = currentTx.TX
+					foundTx.ToB = i == 0
+				}
+			} else {
 
-			stepTx := ApproveeStep{
-				currentStep + 1,
-				currentTx.TX,
-				newestTimestamp(&tx),
-				currentTx.Timestamp - newestTimestamp(&tx),
-				tx.GetHash(),
-				tx.GetBranch(),
-				tx.GetTrunk(),
+				cachedTx := tangle.GetCachedTransactionOrNil(trunkAndBranch[i])
+				if cachedTx != nil {
+					tx := *cachedTx.GetTransaction()
+
+					stepTx := ApproveeStep{
+						currentStep + 1,
+						currentTx.TX,
+						newestTimestamp(&tx),
+						newestTimestamp(&tx) - (currentTx.Timestamp - newestTimestamp(&tx)),
+						tx.GetHash(),
+						tx.GetBranch(),
+						tx.GetTrunk(),
+					}
+
+					if stepTx.Timestamp > lowestTimestamp-300 {
+						callQueue = insertSorted(callQueue, stepTx)
+					} else {
+						overReachQueue = insertSorted(overReachQueue, stepTx)
+					}
+
+					pathRef := PathReference{
+						currentTx.TX,
+						tx.GetHash(),
+						i == 0,
+						currentStep + 1,
+						tx.GetBranch(),
+						tx.GetTrunk(),
+					}
+					localTangle[tx.GetHash()] = pathRef
+
+					cachedTx.Release(true)
+
+				}
 			}
-			cachedTx.Release(true)
 		}
 	}
-	return callQueue, overReachQueue, localTangle
+
+	if _, pathFound := localTangle[endpoint.TX]; !pathFound {
+		return nil, nil, nil, "Not found"
+	}
+	return callQueue, overReachQueue, localTangle, ""
 }
 
 type PathReference struct {
 	ShortestPath trinary.Hash
 	TxID         trinary.Hash
-	BoT          bool
+	ToB          bool
 	Step         int64
 	Branch       trinary.Hash
 	Trunk        trinary.Hash

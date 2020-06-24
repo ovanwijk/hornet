@@ -460,6 +460,6 @@ type GetFindPath struct {
 type GetFindPathReturn struct {
 	Transactions []trinary.Hash `json:"transactions"`
 	Branches     [][]int        `json:"branches"`
-	Vertices     [][]int        `json:"vertices"`
+	Trunks       [][]int        `json:"trunks"`
 	Duration     int            `json:"duration"`
 }
