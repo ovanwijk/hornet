@@ -23,24 +23,6 @@ builds:
       - linux
     goarch:
       - amd64
-  # Linux ARM(v7) statically linked
-  - id: hornet-linux-arm
-    binary: hornet
-    env:
-      - CGO_ENABLED=1
-      - CC=armv7l-linux-musleabihf-gcc
-    ldflags:
-      - -s -w -X github.com/gohornet/hornet/plugins/cli.AppVersion={{.Version}}
-      - -w -extldflags "-static"
-    flags:
-      - -tags=pow_c
-    main: main.go
-    goos:
-      - linux
-    goarch:
-      - arm
-    goarm:
-      - 7
   # Linux ARM64 statically linked
   - id: hornet-linux-arm64
     binary: hornet
@@ -109,21 +91,16 @@ archives:
     name_template: "{{.ProjectName}}-{{.Version}}_{{.Os}}_{{.Arch}}"
     replacements:
       amd64: x86_64
-      386: 32bit
-      arm: ARM
       arm64: ARM64
       darwin: macOS
       linux: Linux
       windows: Windows
-      openbsd: OpenBSD
-      netbsd: NetBSD
-      freebsd: FreeBSD
-      dragonfly: DragonFlyBSD
     files:
       - README.md
       - LICENSE
       - config.json
       - config_comnet.json
+      - config_devnet.json
       - peering.json
       - profiles.json
       - mqtt_config.json
@@ -147,6 +124,7 @@ nfpms:
     config_files:
       "config.json": "/var/lib/hornet/config.json"
       "config_comnet.json": "/var/lib/hornet/config_comnet.json"
+      "config_devnet.json": "/var/lib/hornet/config_devnet.json"
       "mqtt_config.json": "/var/lib/hornet/mqtt_config.json"
       "peering.json": "/var/lib/hornet/peering.json"
       "profiles.json": "/var/lib/hornet/profiles.json"
@@ -160,8 +138,6 @@ nfpms:
       postremove: "nfpm/deb_files/postrm"
       preinstall: "nfpm/deb_files/preinst"
       postinstall: "nfpm/deb_files/postinst"
-    replacements:
-      arm: armhf
     overrides:
       rpm:
         replacements:

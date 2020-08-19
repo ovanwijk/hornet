@@ -4,6 +4,7 @@ const (
 	PriorityCloseDatabase = iota
 	PriorityFlushToDatabase
 	PriorityRequestsProcessor
+	PriorityTipselection
 	PriorityMilestoneSolidifier
 	PriorityMilestoneProcessor
 	PrioritySolidifierGossip
@@ -13,9 +14,12 @@ const (
 	PriorityPeerSendQueue
 	PriorityPeeringTCPServer
 	PriorityPeerReconnecter
+	PriorityHeartbeats
+	PriorityWarpSync
 	PriorityLocalSnapshots
 	PriorityMetricsUpdater
 	PriorityDashboard
+	PriorityPoWHandler
 	PriorityAPI
 	PriorityMetricsPublishers
 	PrioritySpammer

@@ -13,6 +13,7 @@ import (
 	"github.com/iotaledger/iota.go/transaction"
 
 	"github.com/gohornet/hornet/pkg/config"
+	"github.com/gohornet/hornet/pkg/model/hornet"
 	"github.com/gohornet/hornet/pkg/model/tangle"
 )
 
@@ -49,7 +50,8 @@ func getTrytes(i interface{}, c *gin.Context, _ <-chan struct{}) {
 	}
 
 	for _, hash := range query.Hashes {
-		cachedTx := tangle.GetCachedTransactionOrNil(hash) // tx +1
+
+		cachedTx := tangle.GetCachedTransactionOrNil(hornet.HashFromHashTrytes(hash)) // tx +1
 
 		if cachedTx == nil {
 			trytes = append(trytes, strings.Repeat("9", 2673))

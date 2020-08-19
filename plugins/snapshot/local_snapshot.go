@@ -7,17 +7,18 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
 
 	"github.com/iotaledger/iota.go/consts"
-	"github.com/iotaledger/iota.go/trinary"
 
 	"github.com/iotaledger/hive.go/daemon"
 
 	"github.com/gohornet/hornet/pkg/config"
 	"github.com/gohornet/hornet/pkg/dag"
+	"github.com/gohornet/hornet/pkg/model/hornet"
 	"github.com/gohornet/hornet/pkg/model/milestone"
 	"github.com/gohornet/hornet/pkg/model/tangle"
 	"github.com/gohornet/hornet/plugins/gossip"
@@ -39,13 +40,13 @@ var (
 )
 
 // isSolidEntryPoint checks whether any direct approver of the given transaction was confirmed by a milestone which is above the target milestone.
-func isSolidEntryPoint(txHash trinary.Hash, targetIndex milestone.Index) (bool, milestone.Index) {
+func isSolidEntryPoint(txHash hornet.Hash, targetIndex milestone.Index) bool {
 
-	for _, approverHash := range tangle.GetApproverHashes(txHash, true) {
-		cachedTx := tangle.GetCachedTransactionOrNil(approverHash) // tx +1
-		if cachedTx == nil {
+	for _, approverHash := range tangle.GetApproverHashes(txHash) {
+		cachedTxMeta := tangle.GetCachedTxMetadataOrNil(approverHash) // meta +1
+		if cachedTxMeta == nil {
 			// Ignore this transaction since it doesn't exist anymore
-			log.Warnf(errors.Wrapf(ErrApproverTxNotFound, "tx hash: %v, approver hash: %v", txHash, approverHash).Error())
+			log.Warnf(errors.Wrapf(ErrApproverTxNotFound, "tx hash: %v, approver hash: %v", txHash.Trytes(), approverHash.Trytes()).Error())
 			continue
 		}
 
@@ -53,29 +54,27 @@ func isSolidEntryPoint(txHash trinary.Hash, targetIndex milestone.Index) (bool, 
 		//		 since they should all be found by iterating the milestones to a certain depth under targetIndex, because the tipselection for COO was changed.
 		//		 When local snapshots were introduced in IRI, there was the problem that COO approved really old tx as valid tips, which is not the case anymore.
 
-		confirmed, at := cachedTx.GetMetadata().GetConfirmed()
-		cachedTx.Release(true) // tx -1
+		confirmed, at := cachedTxMeta.GetMetadata().GetConfirmed()
+		cachedTxMeta.Release(true) // meta -1
 		if confirmed && (at > targetIndex) {
 			// confirmed by a later milestone than targetIndex => solidEntryPoint
 
-			return true, at
+			return true
 		}
 	}
 
-	return false, 0
+	return false
 }
 
 // getMilestoneApprovees traverses a milestone and collects all tx that were confirmed by that milestone or higher
-func getMilestoneApprovees(milestoneIndex milestone.Index, cachedMsTailTx *tangle.CachedTransaction, collectForPruning bool, abortSignal <-chan struct{}) ([]trinary.Hash, error) {
-
-	defer cachedMsTailTx.Release(true) // tx -1
+func getMilestoneApprovees(milestoneIndex milestone.Index, msTailTxHash hornet.Hash, abortSignal <-chan struct{}) (hornet.Hashes, error) {
 
 	ts := time.Now()
 
-	txsToTraverse := make(map[trinary.Hash]struct{})
-	txsChecked := make(map[trinary.Hash]struct{})
-	var approvees []trinary.Hash
-	txsToTraverse[cachedMsTailTx.GetTransaction().GetHash()] = struct{}{}
+	txsToTraverse := make(map[string]struct{})
+	txsChecked := make(map[string]struct{})
+	var approvees hornet.Hashes
+	txsToTraverse[string(msTailTxHash)] = struct{}{}
 
 	// Collect all tx by traversing the tangle
 	// Loop as long as new transactions are added in every loop cycle
@@ -96,77 +95,55 @@ func getMilestoneApprovees(milestoneIndex milestone.Index, cachedMsTailTx *tangl
 			}
 			txsChecked[txHash] = struct{}{}
 
-			if tangle.SolidEntryPointsContain(txHash) {
+			if tangle.SolidEntryPointsContain(hornet.Hash(txHash)) {
 				// Ignore solid entry points (snapshot milestone included)
 				continue
 			}
 
-			cachedTx := tangle.GetCachedTransactionOrNil(txHash) // tx +1
-			if cachedTx == nil {
-				if !collectForPruning {
-					return nil, errors.Wrapf(ErrCritical, "transaction not found: %v", txHash)
-				}
-
-				// Go on if the tx is missing (needed for pruning of the database)
-				continue
+			cachedTxMeta := tangle.GetCachedTxMetadataOrNil(hornet.Hash(txHash)) // meta +1
+			if cachedTxMeta == nil {
+				return nil, errors.Wrapf(ErrCritical, "transaction not found: %v", hornet.Hash(txHash).Trytes())
 			}
 
-			if confirmed, at := cachedTx.GetMetadata().GetConfirmed(); confirmed {
+			if confirmed, at := cachedTxMeta.GetMetadata().GetConfirmed(); confirmed {
 				if at < milestoneIndex {
 					// Ignore Tx that were confirmed by older milestones
-					cachedTx.Release(true) // tx -1
+					cachedTxMeta.Release(true) // meta -1
 					continue
 				}
+
+				approvees = append(approvees, hornet.Hash(txHash))
+
+				// Traverse the approvee
+				txsToTraverse[string(cachedTxMeta.GetMetadata().GetTrunkHash())] = struct{}{}
+				txsToTraverse[string(cachedTxMeta.GetMetadata().GetBranchHash())] = struct{}{}
+
+				// Do not force release, since it is loaded again
+				cachedTxMeta.Release() // meta -1
+
 			} else {
 				// Tx is not confirmed
-				if !collectForPruning {
-					if cachedTx.GetTransaction().IsTail() {
-						cachedTx.Release(true) // tx -1
-						return nil, errors.Wrapf(ErrCritical, "transaction not confirmed: %v", txHash)
-					}
-
-					// Search all referenced tails of this Tx (needed for correct SolidEntryPoint calculation).
-					// This non-tail tx was not confirmed by the milestone, and could be referenced by the future cone.
-					// Thats why we have to search all tail txs that get referenced by this incomplete bundle, to mark them as SEPs.
-					tailTxs, err := dag.FindAllTails(txHash, true)
-					if err != nil {
-						cachedTx.Release(true) // tx -1
-						return nil, err
-					}
-
-					for tailTx := range tailTxs {
-						txsToTraverse[tailTx] = struct{}{}
-					}
-
-					// Ignore this transaction in the cone because it is not confirmed
-					cachedTx.Release(true) // tx -1
-					continue
+				if cachedTxMeta.GetMetadata().IsTail() {
+					cachedTxMeta.Release(true) // meta -1
+					return nil, errors.Wrapf(ErrCritical, "transaction not confirmed: %v", hornet.Hash(txHash).Trytes())
 				}
 
-				// Check if the we can walk further => if not, it should be fine (only used for pruning anyway)
-				if !tangle.ContainsTransaction(cachedTx.GetTransaction().GetTrunk()) {
-					// Do not force release, since it is loaded again
-					cachedTx.Release() // tx -1
-					approvees = append(approvees, txHash)
-					continue
+				// Search all referenced tails of this Tx (needed for correct SolidEntryPoint calculation).
+				// This non-tail tx was not confirmed by the milestone, and could be referenced by the future cone.
+				// Thats why we have to search all tail txs that get referenced by this incomplete bundle, to mark them as SEPs.
+				tailTxs, err := dag.FindAllTails(hornet.Hash(txHash), false, true)
+				if err != nil {
+					cachedTxMeta.Release(true) // meta -1
+					return nil, err
 				}
 
-				if !tangle.ContainsTransaction(cachedTx.GetTransaction().GetBranch()) {
-					// Do not force release, since it is loaded again
-					cachedTx.Release() // tx -1
-					approvees = append(approvees, txHash)
-					continue
+				for tailTx := range tailTxs {
+					txsToTraverse[tailTx] = struct{}{}
 				}
+
+				// Ignore this transaction in the cone because it is not confirmed
+				cachedTxMeta.Release(true) // meta -1
 			}
-
-			approvees = append(approvees, txHash)
-
-			// Traverse the approvee
-			txsToTraverse[cachedTx.GetTransaction().GetTrunk()] = struct{}{}
-			txsToTraverse[cachedTx.GetTransaction().GetBranch()] = struct{}{}
-
-			// Do not force release, since it is loaded again
-			cachedTx.Release() // tx -1
 		}
 	}
 
@@ -199,7 +176,6 @@ func shouldTakeSnapshot(solidMilestoneIndex milestone.Index) bool {
 func getSolidEntryPoints(targetIndex milestone.Index, abortSignal <-chan struct{}) (map[string]milestone.Index, error) {
 
 	solidEntryPoints := make(map[string]milestone.Index)
-	solidEntryPoints[consts.NullHashTrytes] = targetIndex
 
 	// HINT: Check if "old solid entry points are still valid" is skipped in HORNET,
 	//		 since they should all be found by iterating the milestones to a certain depth under targetIndex, because the tipselection for COO was changed.
@@ -219,13 +195,10 @@ func getSolidEntryPoints(targetIndex milestone.Index, abortSignal <-chan struct{
 		}
 
 		// Get all approvees of that milestone
-		cachedMsTailTx := cachedMs.GetBundle().GetTail() // tx +1
-		cachedMs.Release(true)                           // bundle -1
+		msTailTxHash := cachedMs.GetBundle().GetTailHash()
+		cachedMs.Release(true) // bundle -1
 
-		approvees, err := getMilestoneApprovees(milestoneIndex, cachedMsTailTx.Retain(), false, abortSignal)
-
-		// Do not force release, since it is loaded again
-		cachedMsTailTx.Release() // tx -1
+		approvees, err := getMilestoneApprovees(milestoneIndex, msTailTxHash, abortSignal)
 
 		if err != nil {
 			return nil, err
@@ -238,14 +211,26 @@ func getSolidEntryPoints(targetIndex milestone.Index, abortSignal <-chan struct{
 			default:
 			}
 
-			if isEntryPoint, at := isSolidEntryPoint(approvee, targetIndex); isEntryPoint {
+			if isEntryPoint := isSolidEntryPoint(approvee, targetIndex); isEntryPoint {
 				// A solid entry point should only be a tail transaction, otherwise the whole bundle can't be reproduced with a snapshot file
-				tails, err := dag.FindAllTails(approvee, true)
+				tails, err := dag.FindAllTails(approvee, false, true)
 				if err != nil {
 					return nil, errors.Wrap(ErrCritical, err.Error())
 				}
 
 				for tailHash := range tails {
+					cachedTxMeta := tangle.GetCachedTxMetadataOrNil(hornet.Hash(tailHash))
+					if cachedTxMeta == nil {
+						return nil, errors.Wrapf(ErrCritical, "metadata (%v) not found!", hornet.Hash(tailHash).Trytes())
+					}
+
+					confirmed, at := cachedTxMeta.GetMetadata().GetConfirmed()
+					if !confirmed {
+						cachedTxMeta.Release(true)
+						return nil, errors.Wrapf(ErrCritical, "solid entry point (%v) not confirmed!", hornet.Hash(tailHash).Trytes())
+					}
+					cachedTxMeta.Release(true)
+
 					solidEntryPoints[tailHash] = at
 				}
 			}
@@ -271,7 +256,7 @@ func getSeenMilestones(targetIndex milestone.Index, abortSignal <-chan struct{})
 		if cachedMs == nil {
 			continue
 		}
-		seenMilestones[cachedMs.GetBundle().GetTailHash()] = milestoneIndex
+		seenMilestones[string(cachedMs.GetBundle().GetTailHash())] = milestoneIndex
 		cachedMs.Release(true) // bundle -1
 	}
 	return seenMilestones, nil
@@ -313,6 +298,12 @@ func checkSnapshotLimits(targetIndex milestone.Index, snapshotInfo *tangle.Snaps
 
 func createSnapshotFile(filePath string, lsh *localSnapshotHeader, abortSignal <-chan struct{}) ([]byte, error) {
 
+	if _, fileErr := os.Stat(filePath); os.IsNotExist(fileErr) {
+		// create dir if it not exists
+		if err := os.MkdirAll(filepath.Dir(filePath), 0700); err != nil {
+			return nil, err
+		}
+	}
 	exportFile, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0660)
 	if err != nil {
 		return nil, err
@@ -413,6 +404,9 @@ func createLocalSnapshotWithoutLocking(targetIndex milestone.Index, filePath str
 
 	newBalances, ledgerIndex, err := tangle.GetLedgerStateForMilestone(targetIndex, abortSignal)
 	if err != nil {
+		if err == tangle.ErrOperationAborted {
+			return err
+		}
 		return errors.Wrap(ErrCritical, err.Error())
 	}
 
@@ -472,7 +466,7 @@ func createLocalSnapshotWithoutLocking(targetIndex milestone.Index, filePath str
 		tanglePlugin.Events.SnapshotMilestoneIndexChanged.Trigger(targetIndex)
 	}
 
-	log.Infof("created local snapshot for target index %d (%x), took %v", targetIndex, hash, time.Since(ts))
+	log.Infof("created local snapshot for target index %d (sha256: %x), took %v", targetIndex, hash, time.Since(ts))
 
 	return nil
 }
@@ -484,7 +478,7 @@ func CreateLocalSnapshot(targetIndex milestone.Index, filePath string, writeToDa
 }
 
 type localSnapshotHeader struct {
-	msHash              string
+	msHash              hornet.Hash
 	msIndex             milestone.Index
 	msTimestamp         int64
 	solidEntryPoints    map[string]milestone.Index
@@ -500,12 +494,7 @@ func (ls *localSnapshotHeader) WriteToBuffer(buf io.Writer, abortSignal <-chan s
 		return err
 	}
 
-	msHashBytes, err := trinary.TrytesToBytes(ls.msHash)
-	if err != nil {
-		return err
-	}
-
-	if err = binary.Write(buf, binary.LittleEndian, msHashBytes[:49]); err != nil {
+	if err = binary.Write(buf, binary.LittleEndian, ls.msHash[:49]); err != nil {
 		return err
 	}
 
@@ -540,12 +529,7 @@ func (ls *localSnapshotHeader) WriteToBuffer(buf io.Writer, abortSignal <-chan s
 		default:
 		}
 
-		addrBytes, err := trinary.TrytesToBytes(hash)
-		if err != nil {
-			return err
-		}
-
-		if err = binary.Write(buf, binary.LittleEndian, addrBytes[:49]); err != nil {
+		if err = binary.Write(buf, binary.LittleEndian, hornet.Hash(hash)[:49]); err != nil {
 			return err
 		}
 
@@ -561,12 +545,7 @@ func (ls *localSnapshotHeader) WriteToBuffer(buf io.Writer, abortSignal <-chan s
 		default:
 		}
 
-		addrBytes, err := trinary.TrytesToBytes(hash)
-		if err != nil {
-			return err
-		}
-
-		if err = binary.Write(buf, binary.LittleEndian, addrBytes[:49]); err != nil {
+		if err = binary.Write(buf, binary.LittleEndian, hornet.Hash(hash)[:49]); err != nil {
 			return err
 		}
 
@@ -575,20 +554,14 @@ func (ls *localSnapshotHeader) WriteToBuffer(buf io.Writer, abortSignal <-chan s
 		}
 	}
 
-	// ToDo: Don't convert to trinary at all
-	for hash, val := range ls.balances {
+	for addr, val := range ls.balances {
 		select {
 		case <-abortSignal:
 			return ErrSnapshotCreationWasAborted
 		default:
 		}
 
-		addrBytes, err := trinary.TrytesToBytes(hash)
-		if err != nil {
-			return err
-		}
-
-		if err = binary.Write(buf, binary.LittleEndian, addrBytes[:49]); err != nil {
+		if err = binary.Write(buf, binary.LittleEndian, hornet.Hash(addr)[:49]); err != nil {
 			return err
 		}
 
@@ -626,25 +599,17 @@ func LoadSnapshotFromFile(filePath string) error {
 		return errors.Wrapf(ErrUnsupportedLSFileVersion, "local snapshot file version is %d but this HORNET version only supports %v", fileVersion, SupportedLocalSnapshotFileVersions)
 	}
 
-	hashBuf := make([]byte, 49)
-	if _, err := file.Read(hashBuf); err != nil {
+	msHash := make(hornet.Hash, 49)
+	if _, err := file.Read(msHash); err != nil {
 		return err
 	}
 
 	tangle.WriteLockSolidEntryPoints()
 	tangle.ResetSolidEntryPoints()
 
-	// Genesis transaction
-	tangle.SolidEntryPointsAdd(consts.NullHashTrytes, 0)
-
 	var msIndex int32
 	var msTimestamp int64
 	var solidEntryPointsCount, seenMilestonesCount, ledgerEntriesCount, spentAddrsCount int32
-
-	msHash, err := trinary.BytesToTrytes(hashBuf)
-	if err != nil {
-		return err
-	}
 
 	if err := binary.Read(file, binary.LittleEndian, &msIndex); err != nil {
 		return err
@@ -670,8 +635,9 @@ func LoadSnapshotFromFile(filePath string) error {
 		return err
 	}
 
-	tangle.SetSnapshotMilestone(config.NodeConfig.GetString(config.CfgCoordinatorAddress)[:81], msHash[:81], milestone.Index(msIndex), milestone.Index(msIndex), milestone.Index(msIndex), msTimestamp, spentAddrsCount != 0 && config.NodeConfig.GetBool("spentAddresses.enabled"))
-	tangle.SolidEntryPointsAdd(msHash[:81], milestone.Index(msIndex))
+	coordinatorAddress := hornet.HashFromAddressTrytes(config.NodeConfig.GetString(config.CfgCoordinatorAddress))
+	tangle.SetSnapshotMilestone(coordinatorAddress, msHash, milestone.Index(msIndex), milestone.Index(msIndex), milestone.Index(msIndex), msTimestamp, spentAddrsCount != 0 && config.NodeConfig.GetBool("spentAddresses.enabled"))
+	tangle.SolidEntryPointsAdd(msHash, milestone.Index(msIndex))
 	tangle.SetLatestSeenMilestoneIndexFromSnapshot(milestone.Index(msIndex))
 
 	log.Info("importing solid entry points")
@@ -682,8 +648,9 @@ func LoadSnapshotFromFile(filePath string) error {
 		}
 
 		var val int32
+		txHashBuf := make(hornet.Hash, 49)
 
-		if err := binary.Read(file, binary.LittleEndian, hashBuf); err != nil {
+		if err := binary.Read(file, binary.LittleEndian, txHashBuf); err != nil {
 			return errors.Wrapf(ErrSnapshotImportFailed, "solidEntryPoints: %v", err)
 		}
 
@@ -691,13 +658,7 @@ func LoadSnapshotFromFile(filePath string) error {
 			return errors.Wrapf(ErrSnapshotImportFailed, "solidEntryPoints: %v", err)
 		}
 
-		hash, err := trinary.BytesToTrytes(hashBuf)
-		if err != nil {
-			return errors.Wrapf(ErrSnapshotImportFailed, "solidEntryPoints: %v", err)
-		}
-		//ls.solidEntryPoints[hash[:81]] = val
-
-		tangle.SolidEntryPointsAdd(hash[:81], milestone.Index(val))
+		tangle.SolidEntryPointsAdd(txHashBuf, milestone.Index(val))
 	}
 
 	tangle.StoreSolidEntryPoints()
@@ -711,8 +672,9 @@ func LoadSnapshotFromFile(filePath string) error {
 		}
 
 		var val int32
+		txHashBuf := make(hornet.Hash, 49)
 
-		if err := binary.Read(file, binary.LittleEndian, hashBuf); err != nil {
+		if err := binary.Read(file, binary.LittleEndian, txHashBuf); err != nil {
 			return errors.Wrapf(ErrSnapshotImportFailed, "seenMilestones: %v", err)
 		}
 
@@ -720,27 +682,23 @@ func LoadSnapshotFromFile(filePath string) error {
 			return errors.Wrapf(ErrSnapshotImportFailed, "seenMilestones: %v", err)
 		}
 
-		hash, err := trinary.BytesToTrytes(hashBuf)
-		if err != nil {
-			return errors.Wrapf(ErrSnapshotImportFailed, "seenMilestones: %v", err)
-		}
-
 		tangle.SetLatestSeenMilestoneIndexFromSnapshot(milestone.Index(val))
 		// request the milestone and prevent the request from being discarded from the request queue
-		gossip.Request(hash[:81], milestone.Index(val), true)
+		gossip.Request(txHashBuf, milestone.Index(val), true)
 	}
 
 	log.Info("importing ledger state")
 
-	ledgerState := make(map[trinary.Hash]uint64)
+	ledgerState := make(map[string]uint64)
 	for i := 0; i < int(ledgerEntriesCount); i++ {
 		if daemon.IsStopped() {
 			return ErrSnapshotImportWasAborted
 		}
 
 		var val uint64
+		addrBuf := make(hornet.Hash, 49)
 
-		if err := binary.Read(file, binary.LittleEndian, hashBuf); err != nil {
+		if err := binary.Read(file, binary.LittleEndian, addrBuf); err != nil {
 			return errors.Wrapf(ErrSnapshotImportFailed, "ledgerEntries: %v", err)
 		}
 
@@ -748,11 +706,7 @@ func LoadSnapshotFromFile(filePath string) error {
 			return errors.Wrapf(ErrSnapshotImportFailed, "ledgerEntries: %v", err)
 		}
 
-		hash, err := trinary.BytesToTrytes(hashBuf)
-		if err != nil {
-			return errors.Wrapf(ErrSnapshotImportFailed, "ledgerEntries: %v", err)
-		}
-		ledgerState[hash[:81]] = val
+		ledgerState[string(addrBuf)] = val
 	}
 
 	var total uint64
@@ -792,13 +746,13 @@ func LoadSnapshotFromFile(filePath string) error {
 
 			for j := batchStart; j < batchEnd; j++ {
 
-				spentAddrBuf := make([]byte, 49)
+				spentAddrBuf := make(hornet.Hash, 49)
 				err = binary.Read(file, binary.BigEndian, spentAddrBuf)
 				if err != nil {
 					return errors.Wrapf(ErrSnapshotImportFailed, "spentAddrs: %v", err)
 				}
 
-				tangle.MarkAddressAsSpentBinaryWithoutLocking(spentAddrBuf)
+				tangle.MarkAddressAsSpentWithoutLocking(spentAddrBuf)
 			}
 
 			log.Infof("processed %d/%d spent addresses", batchEnd, spentAddrsCount)

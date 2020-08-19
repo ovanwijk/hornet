@@ -4,10 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
+	"github.com/iotaledger/iota.go/consts"
+	"github.com/iotaledger/iota.go/merkle"
+
 	"github.com/gohornet/hornet/pkg/config"
-	"github.com/gohornet/hornet/pkg/model/coordinator"
+	"github.com/gohornet/hornet/pkg/utils"
+)
+
+const (
+	// printStatusInterval is the interval for printing status messages
+	printStatusInterval = 2 * time.Second
 )
 
 func merkleTreeCreate(args []string) error {
@@ -26,15 +35,56 @@ func merkleTreeCreate(args []string) error {
 	depth := config.NodeConfig.GetInt(config.CfgCoordinatorMerkleTreeDepth)
 
 	if _, err := os.Stat(merkleFilePath); !os.IsNotExist(err) {
-		// merkle tree file already exists
-		return fmt.Errorf("merkle tree file already exists. %v", merkleFilePath)
+		// Merkle tree file already exists
+		return fmt.Errorf("Merkle tree file already exists. %v", merkleFilePath)
 	}
+
+	count := 1 << depth
 
 	ts := time.Now()
-	if err = coordinator.CreateMerkleTreeFile(merkleFilePath, seed, secLvl, depth); err != nil {
-		return err
+	lastStatusTime := time.Now()
+
+	calculateAddressesStartCallback := func(count uint32) {
+		fmt.Printf("calculating %d addresses...\n", count)
 	}
 
-	fmt.Printf("successfully created merkle tree (took %v).\n", time.Since(ts).Truncate(time.Second))
+	calculateAddressesCallback := func(index uint32) {
+		if time.Since(lastStatusTime) >= printStatusInterval {
+			lastStatusTime = time.Now()
+
+			percentage, remaining := utils.EstimateRemainingTime(ts, int64(index), int64(count))
+			fmt.Printf("calculated %d/%d (%0.2f%%) addresses. %v left...\n", index, count, percentage, remaining.Truncate(time.Second))
+		}
+	}
+
+	calculateAddressesFinishedCallback := func(count uint32) {
+		fmt.Printf("calculated %d/%d (100.00%%) addresses (took %v).\n", count, count, time.Since(ts).Truncate(time.Second))
+	}
+
+	calculateLayersCallback := func(index uint32) {
+		fmt.Printf("calculating nodes for layer %d\n", index)
+	}
+
+	mt, err := merkle.CreateMerkleTree(seed, consts.SecurityLevel(secLvl), depth,
+		merkle.MerkleCreateOptions{
+			CalculateAddressesStartCallback:    calculateAddressesStartCallback,
+			CalculateAddressesCallback:         calculateAddressesCallback,
+			CalculateAddressesFinishedCallback: calculateAddressesFinishedCallback,
+			CalculateLayersCallback:            calculateLayersCallback,
+			Parallelism:                        runtime.NumCPU(),
+		})
+
+	if err != nil {
+		return fmt.Errorf("error creating Merkle tree: %v", err)
+	}
+
+	if err := merkle.StoreMerkleTreeFile(merkleFilePath, mt); err != nil {
+		return fmt.Errorf("error persisting Merkle tree: %v", err)
+	}
+
+	fmt.Printf("Merkle tree root: %v\n", mt.Root)
+
+	fmt.Printf("successfully created Merkle tree (took %v).\n", time.Since(ts).Truncate(time.Second))
+
 	return nil
 }

@@ -1,9 +1,12 @@
 package tangle
 
 import (
+	"github.com/iotaledger/iota.go/consts"
 	"github.com/iotaledger/iota.go/trinary"
 
+	"github.com/gohornet/hornet/pkg/model/hornet"
 	"github.com/gohornet/hornet/pkg/model/milestone"
+	"github.com/gohornet/hornet/pkg/t6b1"
 )
 
 func (bundle *Bundle) setMilestone(milestone bool) {
@@ -24,12 +27,32 @@ func (bundle *Bundle) IsMilestone() bool {
 }
 
 func (bundle *Bundle) GetMilestoneIndex() milestone.Index {
-	cachedTailTx := bundle.GetTail() // tx +1
-	index := milestone.Index(trinary.TrytesToInt(cachedTailTx.GetTransaction().Tx.ObsoleteTag))
-	cachedTailTx.Release() // tx -1
-	return index
+	bundle.milestoneIndexOnce.Do(func() {
+		cachedTailTx := bundle.GetTail() // tx +1
+		bundle.milestoneIndex = milestone.Index(trinary.TrytesToInt(cachedTailTx.GetTransaction().Tx.ObsoleteTag))
+		cachedTailTx.Release() // tx -1
+	})
+
+	return bundle.milestoneIndex
 }
 
-func (bundle *Bundle) GetMilestoneHash() trinary.Hash {
+func (bundle *Bundle) GetMilestoneHash() hornet.Hash {
 	return bundle.tailTx
+}
+
+func (bundle *Bundle) GetMilestoneMerkleTreeHash() []byte {
+
+	headTx := bundle.GetHead()
+	defer headTx.Release(true)
+
+	// t6b1 encoding, so 6 trits per byte
+	merkleRootHashSizeInTrytes := coordinatorMilestoneMerkleHashFunc.Size() * 6 / consts.TrinaryRadix
+	auditPathLength := coordinatorMerkleTreeDepth * consts.HashTrytesSize
+
+	if (auditPathLength + uint64(merkleRootHashSizeInTrytes)) > consts.SignatureMessageFragmentSizeInTrytes {
+		return nil
+	}
+
+	merkleRootHashTrytes := headTx.GetTransaction().Tx.SignatureMessageFragment[auditPathLength : int(auditPathLength)+merkleRootHashSizeInTrytes]
+	return t6b1.MustTrytesToBytes(merkleRootHashTrytes)[:coordinatorMilestoneMerkleHashFunc.Size()]
 }

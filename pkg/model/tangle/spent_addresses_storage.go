@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iotaledger/iota.go/trinary"
-
 	"github.com/iotaledger/hive.go/kvstore"
 	"github.com/iotaledger/hive.go/objectstorage"
 
@@ -45,10 +43,7 @@ func (c *CachedSpentAddress) GetSpentAddress() *hornet.SpentAddress {
 }
 
 func spentAddressFactory(key []byte) (objectstorage.StorableObject, int, error) {
-	sa := &hornet.SpentAddress{
-		Address: make([]byte, 49),
-	}
-	copy(sa.Address, key[:49])
+	sa := hornet.NewSpentAddress(key[:49])
 	return sa, 49, nil
 }
 
@@ -56,9 +51,7 @@ func GetSpentAddressesStorageSize() int {
 	return spentAddressesStorage.GetSize()
 }
 
-func configureSpentAddressesStorage(store kvstore.KVStore) {
-
-	opts := profile.LoadProfile().Caches.SpentAddresses
+func configureSpentAddressesStorage(store kvstore.KVStore, opts profile.CacheOpts) {
 
 	spentAddressesStorage = objectstorage.New(
 		store.WithRealm([]byte{StorePrefixSpentAddresses}),
@@ -66,6 +59,7 @@ func configureSpentAddressesStorage(store kvstore.KVStore) {
 		objectstorage.CacheTime(time.Duration(opts.CacheTimeMs)*time.Millisecond),
 		objectstorage.PersistenceEnabled(true),
 		objectstorage.KeysOnly(true),
+		objectstorage.StoreOnCreation(true),
 		objectstorage.LeakDetectionEnabled(opts.LeakDetectionOptions.Enabled,
 			objectstorage.LeakDetectionOptions{
 				MaxConsumersPerObject: opts.LeakDetectionOptions.MaxConsumersPerObject,
@@ -75,40 +69,27 @@ func configureSpentAddressesStorage(store kvstore.KVStore) {
 }
 
 // spentAddress +-0
-func WasAddressSpentFrom(address trinary.Trytes) bool {
-	return spentAddressesStorage.Contains(trinary.MustTrytesToBytes(address)[:49])
+func WasAddressSpentFrom(address hornet.Hash) bool {
+	return spentAddressesStorage.Contains(address)
 }
 
 // spentAddress +-0
-func MarkAddressAsSpent(address trinary.Trytes) bool {
+func MarkAddressAsSpent(address hornet.Hash) bool {
 	spentAddressesLock.Lock()
 	defer spentAddressesLock.Unlock()
 
-	spentAddress, _, _ := spentAddressFactory(trinary.MustTrytesToBytes(address)[:49])
-
-	newlyAdded := false
-	spentAddressesStorage.ComputeIfAbsent(spentAddress.ObjectStorageKey(), func(key []byte) objectstorage.StorableObject {
-		newlyAdded = true
-		spentAddress.Persist()
-		spentAddress.SetModified()
-		return spentAddress
-	}).Release(true)
-
-	return newlyAdded
+	return MarkAddressAsSpentWithoutLocking(address)
 }
 
 // spentAddress +-0
-func MarkAddressAsSpentBinaryWithoutLocking(address []byte) bool {
+func MarkAddressAsSpentWithoutLocking(address hornet.Hash) bool {
 
-	spentAddress, _, _ := spentAddressFactory(address[:49])
+	spentAddress, _, _ := spentAddressFactory(address)
 
-	newlyAdded := false
-	spentAddressesStorage.ComputeIfAbsent(spentAddress.ObjectStorageKey(), func(key []byte) objectstorage.StorableObject {
-		newlyAdded = true
-		spentAddress.Persist()
-		spentAddress.SetModified()
-		return spentAddress
-	}).Release(true)
+	cachedSpentAddress, newlyAdded := spentAddressesStorage.StoreIfAbsent(spentAddress)
+	if cachedSpentAddress != nil {
+		cachedSpentAddress.Release(true)
+	}
 
 	return newlyAdded
 }
@@ -143,4 +124,8 @@ func StreamSpentAddressesToWriter(buf io.Writer, abortSignal <-chan struct{}) (i
 
 func ShutdownSpentAddressesStorage() {
 	spentAddressesStorage.Shutdown()
+}
+
+func FlushSpentAddressesStorage() {
+	spentAddressesStorage.Flush()
 }

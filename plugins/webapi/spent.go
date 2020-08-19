@@ -9,6 +9,7 @@ import (
 
 	"github.com/iotaledger/iota.go/address"
 
+	"github.com/gohornet/hornet/pkg/model/hornet"
 	"github.com/gohornet/hornet/pkg/model/tangle"
 )
 
@@ -54,7 +55,7 @@ func wereAddressesSpentFrom(i interface{}, c *gin.Context, _ <-chan struct{}) {
 		}
 
 		// State
-		result.States = append(result.States, tangle.WasAddressSpentFrom(addr[:81]))
+		result.States = append(result.States, tangle.WasAddressSpentFrom(hornet.HashFromAddressTrytes(addr)))
 	}
 
 	c.JSON(http.StatusOK, result)

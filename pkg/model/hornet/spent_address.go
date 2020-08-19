@@ -1,28 +1,35 @@
 package hornet
 
 import (
+	"fmt"
+
 	"github.com/iotaledger/hive.go/objectstorage"
-	"github.com/iotaledger/iota.go/trinary"
 )
 
 type SpentAddress struct {
 	objectstorage.StorableObjectFlags
 
-	Address []byte
+	address Hash
 }
 
-func (sa *SpentAddress) GetAddress() trinary.Hash {
-	return trinary.MustBytesToTrytes(sa.Address, 81)
+func NewSpentAddress(address Hash) *SpentAddress {
+	return &SpentAddress{
+		address: address,
+	}
+}
+
+func (sa *SpentAddress) GetAddress() Hash {
+	return sa.address
 }
 
 // ObjectStorage interface
 
 func (sa *SpentAddress) Update(_ objectstorage.StorableObject) {
-	panic("SpentAddress should never be updated")
+	panic(fmt.Sprintf("SpentAddress should never be updated: %v", sa.address.Trytes()))
 }
 
 func (sa *SpentAddress) ObjectStorageKey() []byte {
-	return sa.Address
+	return sa.address
 }
 
 func (sa *SpentAddress) ObjectStorageValue() (_ []byte) {

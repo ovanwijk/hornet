@@ -1,8 +1,10 @@
 package hornet
 
 import (
+	"fmt"
+	"sync"
+
 	"github.com/iotaledger/iota.go/transaction"
-	"github.com/iotaledger/iota.go/trinary"
 
 	"github.com/iotaledger/hive.go/objectstorage"
 
@@ -12,7 +14,19 @@ import (
 type Transaction struct {
 	objectstorage.StorableObjectFlags
 
-	TxHash []byte
+	txHashOnce     sync.Once
+	trunkHashOnce  sync.Once
+	branchHashOnce sync.Once
+	bundleHashOnce sync.Once
+	tagOnce        sync.Once
+	addressOnce    sync.Once
+
+	txHash     Hash
+	trunkHash  Hash
+	branchHash Hash
+	bundleHash Hash
+	tag        Hash
+	address    Hash
 
 	// Decompressed iota.go Transaction containing Hash
 	Tx *transaction.Transaction
@@ -24,9 +38,14 @@ type Transaction struct {
 	timestamp int64
 }
 
-func NewTransaction(transaction *transaction.Transaction, transactionBytes []byte) *Transaction {
+func NewTransaction(txHash Hash) *Transaction {
+	return &Transaction{
+		txHash: txHash,
+	}
+}
+
+func NewTransactionFromTx(transaction *transaction.Transaction, transactionBytes []byte) *Transaction {
 	tx := &Transaction{
-		TxHash:    trinary.MustTrytesToBytes(transaction.Hash)[:49],
 		Tx:        transaction,
 		RawBytes:  transactionBytes,
 		timestamp: getTimestampFromTx(transaction),
@@ -49,16 +68,49 @@ func (tx *Transaction) GetAttachmentTimestamp() int64 {
 	return tx.Tx.AttachmentTimestamp
 }
 
-func (tx *Transaction) GetHash() trinary.Hash {
-	return tx.Tx.Hash
+func (tx *Transaction) GetTxHash() Hash {
+	tx.txHashOnce.Do(func() {
+		tx.txHash = HashFromHashTrytes(tx.Tx.Hash)
+	})
+
+	return tx.txHash
 }
 
-func (tx *Transaction) GetTrunk() trinary.Hash {
-	return tx.Tx.TrunkTransaction
+func (tx *Transaction) GetTrunkHash() Hash {
+	tx.trunkHashOnce.Do(func() {
+		tx.trunkHash = HashFromHashTrytes(tx.Tx.TrunkTransaction)
+	})
+
+	return tx.trunkHash
 }
 
-func (tx *Transaction) GetBranch() trinary.Hash {
-	return tx.Tx.BranchTransaction
+func (tx *Transaction) GetBranchHash() Hash {
+	tx.branchHashOnce.Do(func() {
+		tx.branchHash = HashFromHashTrytes(tx.Tx.BranchTransaction)
+	})
+
+	return tx.branchHash
+}
+
+func (tx *Transaction) GetBundleHash() Hash {
+	tx.bundleHashOnce.Do(func() {
+		tx.bundleHash = HashFromHashTrytes(tx.Tx.Bundle)
+	})
+	return tx.bundleHash
+}
+
+func (tx *Transaction) GetTag() Hash {
+	tx.tagOnce.Do(func() {
+		tx.tag = HashFromTagTrytes(tx.Tx.Tag)
+	})
+	return tx.tag
+}
+
+func (tx *Transaction) GetAddress() Hash {
+	tx.addressOnce.Do(func() {
+		tx.address = HashFromAddressTrytes(tx.Tx.Address)
+	})
+	return tx.address
 }
 
 func (tx *Transaction) GetTimestamp() int64 {
@@ -80,11 +132,11 @@ func (tx *Transaction) IsValue() bool {
 // ObjectStorage interface
 
 func (tx *Transaction) Update(_ objectstorage.StorableObject) {
-	panic("Transaction should never be updated")
+	panic(fmt.Sprintf("Transaction should never be updated: %v", tx.txHash.Trytes()))
 }
 
 func (tx *Transaction) ObjectStorageKey() []byte {
-	return tx.TxHash
+	return tx.GetTxHash()
 }
 
 func (tx *Transaction) ObjectStorageValue() (data []byte) {
@@ -103,7 +155,7 @@ func (tx *Transaction) UnmarshalObjectStorageValue(data []byte) (consumedBytes i
 	*/
 
 	tx.RawBytes = data
-	transactionHash := trinary.MustBytesToTrytes(tx.TxHash, 81)
+	transactionHash := tx.txHash.Trytes()
 
 	transaction, err := compressed.TransactionFromCompressedBytes(tx.RawBytes, transactionHash)
 	if err != nil {

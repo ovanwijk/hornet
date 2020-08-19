@@ -2,13 +2,13 @@ package tangle
 
 import (
 	"encoding/binary"
+	"fmt"
 	"time"
 
 	"github.com/iotaledger/hive.go/kvstore"
 	"github.com/iotaledger/hive.go/objectstorage"
 
-	"github.com/iotaledger/iota.go/trinary"
-
+	"github.com/gohornet/hornet/pkg/model/hornet"
 	"github.com/gohornet/hornet/pkg/model/milestone"
 	"github.com/gohornet/hornet/pkg/profile"
 )
@@ -37,15 +37,14 @@ func GetMilestoneStorageSize() int {
 	return milestoneStorage.GetSize()
 }
 
-func configureMilestoneStorage(store kvstore.KVStore) {
-
-	opts := profile.LoadProfile().Caches.Milestones
+func configureMilestoneStorage(store kvstore.KVStore, opts profile.CacheOpts) {
 
 	milestoneStorage = objectstorage.New(
 		store.WithRealm([]byte{StorePrefixMilestones}),
 		milestoneFactory,
 		objectstorage.CacheTime(time.Duration(opts.CacheTimeMs)*time.Millisecond),
 		objectstorage.PersistenceEnabled(true),
+		objectstorage.StoreOnCreation(true),
 		objectstorage.LeakDetectionEnabled(opts.LeakDetectionOptions.Enabled,
 			objectstorage.LeakDetectionOptions{
 				MaxConsumersPerObject: opts.LeakDetectionOptions.MaxConsumersPerObject,
@@ -59,13 +58,13 @@ type Milestone struct {
 	objectstorage.StorableObjectFlags
 
 	Index milestone.Index
-	Hash  trinary.Hash
+	Hash  hornet.Hash
 }
 
 // ObjectStorage interface
 
 func (ms *Milestone) Update(_ objectstorage.StorableObject) {
-	panic("Milestone should never be updated")
+	panic(fmt.Sprintf("Milestone should never be updated: %v (%d)", ms.Hash.Trytes(), ms.Index))
 }
 
 func (ms *Milestone) ObjectStorageKey() []byte {
@@ -76,14 +75,12 @@ func (ms *Milestone) ObjectStorageValue() (data []byte) {
 	/*
 		49 byte transaction hash
 	*/
-	value := trinary.MustTrytesToBytes(ms.Hash)[:49]
-
-	return value
+	return ms.Hash
 }
 
 func (ms *Milestone) UnmarshalObjectStorageValue(data []byte) (consumedBytes int, err error) {
 
-	ms.Hash = trinary.MustBytesToTrytes(data, 81)
+	ms.Hash = hornet.Hash(data[:49])
 	return 49, nil
 }
 
@@ -127,31 +124,18 @@ func SearchLatestMilestoneIndexInStore() milestone.Index {
 	return latestMilestoneIndex
 }
 
-type MilestoneConsumer func(cachedMs objectstorage.CachedObject)
+// MilestoneIndexConsumer consumes the given index during looping through all milestones in the persistence layer.
+type MilestoneIndexConsumer func(index milestone.Index) bool
 
-// MilestoneIndexConsumer consumes the given index during looping though all milestones in the persistence layer.
-type MilestoneIndexConsumer func(index milestone.Index)
-
-func ForEachMilestone(consumer MilestoneConsumer) {
-	milestoneStorage.ForEach(func(key []byte, cachedMs objectstorage.CachedObject) bool {
-		defer cachedMs.Release(true) // tx -1
-		consumer(cachedMs.Retain())
-		return true
-	})
-}
-
-// ForEachMilestoneIndex loops though all milestones in the persistence layer.
+// ForEachMilestoneIndex loops through all milestones in the persistence layer.
 func ForEachMilestoneIndex(consumer MilestoneIndexConsumer, skipCache bool) {
 	milestoneStorage.ForEachKeyOnly(func(key []byte) bool {
-		consumer(milestoneIndexFromDatabaseKey(key))
-		return true
+		return consumer(milestoneIndexFromDatabaseKey(key))
 	}, skipCache)
 }
 
 // milestone +1
-func StoreMilestone(bndl *Bundle) (bool, *CachedMilestone) {
-
-	newlyAdded := false
+func StoreMilestone(bndl *Bundle) *CachedMilestone {
 
 	if bndl.IsMilestone() {
 
@@ -160,14 +144,8 @@ func StoreMilestone(bndl *Bundle) (bool, *CachedMilestone) {
 			Hash:  bndl.GetMilestoneHash(),
 		}
 
-		cachedMilestone := milestoneStorage.ComputeIfAbsent(milestone.ObjectStorageKey(), func(key []byte) objectstorage.StorableObject { // milestone +1
-			newlyAdded = true
-			milestone.Persist()
-			milestone.SetModified()
-			return milestone
-		})
-
-		return newlyAdded, &CachedMilestone{CachedObject: cachedMilestone}
+		// milestones should never exist in the database already, even with an unclean database
+		return &CachedMilestone{CachedObject: milestoneStorage.Store(milestone)}
 	}
 
 	panic("Bundle is not a milestone")

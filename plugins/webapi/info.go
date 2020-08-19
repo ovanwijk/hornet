@@ -9,10 +9,12 @@ import (
 	"github.com/iotaledger/iota.go/consts"
 
 	"github.com/gohornet/hornet/pkg/config"
+	"github.com/gohornet/hornet/pkg/metrics"
 	"github.com/gohornet/hornet/pkg/model/tangle"
 	"github.com/gohornet/hornet/plugins/cli"
 	"github.com/gohornet/hornet/plugins/gossip"
 	"github.com/gohornet/hornet/plugins/peering"
+	tangleplugin "github.com/gohornet/hornet/plugins/tangle"
 )
 
 func init() {
@@ -43,9 +45,7 @@ func getNodeInfo(_ interface{}, c *gin.Context, _ <-chan struct{}) {
 	// Latest milestone hash
 	cachedLatestMs := tangle.GetMilestoneOrNil(lmi) // bundle +1
 	if cachedLatestMs != nil {
-		cachedMsTailTx := cachedLatestMs.GetBundle().GetTail() // tx +1
-		result.LatestMilestone = cachedMsTailTx.GetTransaction().GetHash()
-		cachedMsTailTx.Release(true) // tx -1
+		result.LatestMilestone = cachedLatestMs.GetBundle().GetMilestoneHash().Trytes()
 		cachedLatestMs.Release(true) // bundle -1
 	}
 
@@ -54,21 +54,20 @@ func getNodeInfo(_ interface{}, c *gin.Context, _ <-chan struct{}) {
 	result.LatestSolidSubtangleMilestoneIndex = smi
 	result.LatestSolidSubtangleMilestone = consts.NullHashTrytes
 	result.IsSynced = tangle.IsNodeSyncedWithThreshold()
+	result.Health = tangleplugin.IsNodeHealthy()
 
 	// Solid milestone hash
 	cachedSolidMs := tangle.GetMilestoneOrNil(smi) // bundle +1
 	if cachedSolidMs != nil {
-		cachedMsTailTx := cachedSolidMs.GetBundle().GetTail() // tx +1
-		result.LatestSolidSubtangleMilestone = cachedMsTailTx.GetTransaction().GetHash()
-		cachedMsTailTx.Release(true) // tx -1
-		cachedSolidMs.Release(true)  // bundle -1
+		result.LatestSolidSubtangleMilestone = cachedSolidMs.GetBundle().GetMilestoneHash().Trytes()
+		cachedSolidMs.Release(true) // bundle -1
 	}
 
 	// Milestone start index
 	snapshotInfo := tangle.GetSnapshotInfo()
 	if snapshotInfo != nil {
 		result.MilestoneStartIndex = snapshotInfo.PruningIndex
-		result.LastSnapshottedMilestoneIndex = snapshotInfo.PruningIndex
+		result.LastSnapshottedMilestoneIndex = snapshotInfo.SnapshotIndex
 	}
 
 	// System time
@@ -81,6 +80,9 @@ func getNodeInfo(_ interface{}, c *gin.Context, _ <-chan struct{}) {
 	} else {
 		result.Features = []string{}
 	}
+
+	// Tips
+	result.Tips = metrics.SharedServerMetrics.TipsNonLazy.Load() + metrics.SharedServerMetrics.TipsSemiLazy.Load()
 
 	// TX to request
 	queued, pending, _ := gossip.RequestQueue().Size()

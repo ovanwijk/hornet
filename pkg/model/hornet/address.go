@@ -1,7 +1,7 @@
 package hornet
 
 import (
-	"github.com/iotaledger/iota.go/trinary"
+	"fmt"
 
 	"github.com/iotaledger/hive.go/objectstorage"
 )
@@ -12,34 +12,46 @@ const (
 
 type Address struct {
 	objectstorage.StorableObjectFlags
-	Address []byte
-	IsValue bool
-	TxHash  []byte
+	address Hash
+	isValue bool
+	txHash  Hash
 }
 
-func (a *Address) GetAddress() trinary.Hash {
-	return trinary.MustBytesToTrytes(a.Address, 81)
+func NewAddress(address Hash, txHash Hash, isValue bool) *Address {
+	return &Address{
+		address: address,
+		isValue: isValue,
+		txHash:  txHash,
+	}
 }
 
-func (a *Address) GetTransactionHash() trinary.Hash {
-	return trinary.MustBytesToTrytes(a.TxHash, 81)
+func (a *Address) GetAddress() Hash {
+	return a.address
+}
+
+func (a *Address) GetTxHash() Hash {
+	return a.txHash
+}
+
+func (a *Address) IsValue() bool {
+	return a.isValue
 }
 
 // ObjectStorage interface
 
 func (a *Address) Update(_ objectstorage.StorableObject) {
-	panic("Address should never be updated")
+	panic(fmt.Sprintf("Address should never be updated: %v, TxHash: %v", a.address.Trytes(), a.txHash.Trytes()))
 }
 
 func (a *Address) ObjectStorageKey() []byte {
 
 	var isValueByte byte
-	if a.IsValue {
+	if a.isValue {
 		isValueByte = AddressTxIsValue
 	}
 
-	result := append(a.Address, isValueByte)
-	return append(result, a.TxHash...)
+	result := append(a.address, isValueByte)
+	return append(result, a.txHash...)
 }
 
 func (a *Address) ObjectStorageValue() (_ []byte) {

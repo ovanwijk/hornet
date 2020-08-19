@@ -32,8 +32,6 @@ var (
 
 func configureTangleProcessor(_ *node.Plugin) {
 
-	configureGossipSolidifier()
-
 	receiveTxWorkerPool = workerpool.New(func(task workerpool.Task) {
 		processIncomingTx(task.Param(0).(*hornet.Transaction), task.Param(1).(*rqueue.Request), task.Param(2).(*peer.Peer))
 		task.Return(nil)
@@ -45,39 +43,49 @@ func configureTangleProcessor(_ *node.Plugin) {
 	}, workerpool.WorkerCount(processValidMilestoneWorkerCount), workerpool.QueueSize(processValidMilestoneQueueSize), workerpool.FlushTasksAtShutdown(true))
 
 	milestoneSolidifierWorkerPool = workerpool.New(func(task workerpool.Task) {
-		if daemon.IsStopped() {
-			return
-		}
 		solidifyMilestone(task.Param(0).(milestone.Index), task.Param(1).(bool))
 		task.Return(nil)
 	}, workerpool.WorkerCount(milestoneSolidifierWorkerCount), workerpool.QueueSize(milestoneSolidifierQueueSize))
-
-	metricsplugin.Events.TPSMetricsUpdated.Attach(events.NewClosure(func(tpsMetrics *metricsplugin.TPSMetrics) {
-		lastIncomingTPS = tpsMetrics.Incoming
-		lastNewTPS = tpsMetrics.New
-		lastOutgoingTPS = tpsMetrics.Outgoing
-	}))
-
-	tangle.Events.ReceivedValidMilestone.Attach(events.NewClosure(onReceivedValidMilestone))
-	tangle.Events.ReceivedInvalidMilestone.Attach(events.NewClosure(onReceivedInvalidMilestone))
 }
 
 func runTangleProcessor(_ *node.Plugin) {
 	log.Info("Starting TangleProcessor ...")
 
-	runGossipSolidifier()
-
-	submitReceivedTxForProcessing := events.NewClosure(func(transaction *hornet.Transaction, request *rqueue.Request, p *peer.Peer) {
+	onTransactionProcessed := events.NewClosure(func(transaction *hornet.Transaction, request *rqueue.Request, p *peer.Peer) {
 		receiveTxWorkerPool.Submit(transaction, request, p)
 	})
 
+	onTPSMetricsUpdated := events.NewClosure(func(tpsMetrics *metricsplugin.TPSMetrics) {
+		lastIncomingTPS = tpsMetrics.Incoming
+		lastNewTPS = tpsMetrics.New
+		lastOutgoingTPS = tpsMetrics.Outgoing
+	})
+
+	onReceivedValidMilestone := events.NewClosure(func(cachedBndl *tangle.CachedBundle) {
+		_, added := processValidMilestoneWorkerPool.Submit(cachedBndl) // bundle pass +1
+		if !added {
+			// Release shouldn't be forced, to cache the latest milestones
+			cachedBndl.Release() // bundle -1
+		}
+	})
+
+	onReceivedInvalidMilestone := events.NewClosure(func(err error) {
+		log.Info(err)
+	})
+
+	daemon.BackgroundWorker("TangleProcessor[UpdateMetrics]", func(shutdownSignal <-chan struct{}) {
+		metricsplugin.Events.TPSMetricsUpdated.Attach(onTPSMetricsUpdated)
+		<-shutdownSignal
+		metricsplugin.Events.TPSMetricsUpdated.Detach(onTPSMetricsUpdated)
+	}, shutdown.PriorityMetricsUpdater)
+
 	daemon.BackgroundWorker("TangleProcessor[ReceiveTx]", func(shutdownSignal <-chan struct{}) {
 		log.Info("Starting TangleProcessor[ReceiveTx] ... done")
-		gossip.Processor().Events.TransactionProcessed.Attach(submitReceivedTxForProcessing)
+		gossip.Processor().Events.TransactionProcessed.Attach(onTransactionProcessed)
 		receiveTxWorkerPool.Start()
 		<-shutdownSignal
 		log.Info("Stopping TangleProcessor[ReceiveTx] ...")
-		gossip.Processor().Events.TransactionProcessed.Detach(submitReceivedTxForProcessing)
+		gossip.Processor().Events.TransactionProcessed.Detach(onTransactionProcessed)
 		receiveTxWorkerPool.StopAndWait()
 		log.Info("Stopping TangleProcessor[ReceiveTx] ... done")
 	}, shutdown.PriorityReceiveTxWorker)
@@ -85,8 +93,12 @@ func runTangleProcessor(_ *node.Plugin) {
 	daemon.BackgroundWorker("TangleProcessor[ProcessMilestone]", func(shutdownSignal <-chan struct{}) {
 		log.Info("Starting TangleProcessor[ProcessMilestone] ... done")
 		processValidMilestoneWorkerPool.Start()
+		tangle.Events.ReceivedValidMilestone.Attach(onReceivedValidMilestone)
+		tangle.Events.ReceivedInvalidMilestone.Attach(onReceivedInvalidMilestone)
 		<-shutdownSignal
 		log.Info("Stopping TangleProcessor[ProcessMilestone] ...")
+		tangle.Events.ReceivedValidMilestone.Detach(onReceivedValidMilestone)
+		tangle.Events.ReceivedInvalidMilestone.Detach(onReceivedInvalidMilestone)
 		processValidMilestoneWorkerPool.StopAndWait()
 		log.Info("Stopping TangleProcessor[ProcessMilestone] ... done")
 	}, shutdown.PriorityMilestoneProcessor)
@@ -144,9 +156,15 @@ func processIncomingTx(incomingTx *hornet.Transaction, request *rqueue.Request, 
 		Events.ReceivedKnownTransaction.Trigger(cachedTx)
 	}
 
+	// "ProcessedTransaction" event has to be fired after "ReceivedNewTransaction" event,
+	// otherwise there is a race condition in the coordinator plugin that tries to "ComputeMerkleTreeRootHash"
+	// with the transactions it issued itself because the transactions may be not solid yet and therefore their bundles
+	// are not created yet.
+	Events.ProcessedTransaction.Trigger(incomingTx.GetTxHash())
+
 	if request != nil {
 		// mark the received request as processed
-		gossip.RequestQueue().Processed(incomingTx.GetHash())
+		gossip.RequestQueue().Processed(incomingTx.GetTxHash())
 	}
 
 	// we check whether the request is nil, so we only trigger the solidifier when
@@ -157,18 +175,6 @@ func processIncomingTx(incomingTx *hornet.Transaction, request *rqueue.Request, 
 		// which should be solid given that the request queue is empty
 		milestoneSolidifierWorkerPool.TrySubmit(milestone.Index(0), true)
 	}
-}
-
-func onReceivedValidMilestone(cachedBndl *tangle.CachedBundle) {
-	_, added := processValidMilestoneWorkerPool.Submit(cachedBndl) // bundle pass +1
-	if !added {
-		// Release shouldn't be forced, to cache the latest milestones
-		cachedBndl.Release() // bundle -1
-	}
-}
-
-func onReceivedInvalidMilestone(err error) {
-	log.Info(err)
 }
 
 func printStatus() {
@@ -186,7 +192,8 @@ func printStatus() {
 				"reqQMs: %d, "+
 				"processor: %05d, "+
 				"LSMI/LMI: %d/%d, "+
-				"TPS (in/new/out): %05d/%05d/%05d",
+				"TPS (in/new/out): %05d/%05d/%05d, "+
+				"Tips (non-/semi-lazy): %d/%d",
 			queued, pending, processing, avgLatency,
 			currentLowestMilestoneIndexInReqQ,
 			receiveTxWorkerPool.GetPendingQueueSize(),
@@ -194,5 +201,7 @@ func printStatus() {
 			tangle.GetLatestMilestoneIndex(),
 			lastIncomingTPS,
 			lastNewTPS,
-			lastOutgoingTPS))
+			lastOutgoingTPS,
+			metrics.SharedServerMetrics.TipsNonLazy.Load(),
+			metrics.SharedServerMetrics.TipsSemiLazy.Load()))
 }

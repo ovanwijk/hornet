@@ -2,6 +2,561 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 19.08.2020
+
+:warning: **Breaking change:** :warning:
+Please update to this version as soon as the mainnet coordinator got upgraded.
+Instructions on how to update to this version will be posted in due time.
+The old HORNET versions won't be functional within the mainnet anymore!
+
+### Added
+
+    - White-Flag confirmation
+    - Weighted uniform random tipselection for nodes
+    - Adaptive heaviest branch tipselection for coordinator
+    - Optional powsrv.io PoW support
+    - LMI and neighbor counts to dashboard
+    - getTipInfo API call
+    - "isHealthy" to getNodeInfo
+    - conf_trytes (confirmed trytes) ZMQ topic
+    - conf_trytes (confirmed trytes) MQTT topic
+    - Conflicting badge to the transaction explorer
+    - Add autopeering rule to drop neighbors with LSMI below our pruning index
+    - Automatic dashboard websocket reconnect
+    - Database tainted flag for coordinator
+
+### Changed
+
+    - Request tx from all neighbors that could have the data
+    - Bump protocol feature set for whiteflag (breaking protocol change)
+    - Reduced dashboard traffic by introducing subscriptions to topics
+    - Store binary trunk, branch, and bundle hashes in metadata to reduce load on IO
+    - Improve caching strategy in solidification and confirmation
+    - Improve caching in the dag helpers
+    - Reduce recursion in the future cone solidifier
+    - Use stack based DFS in TraverseApprovees
+    - Use stack based BFS in TraverseApprovers
+    - Return false for conflicting tx in the getInclusionStates web api call
+    - Coordinator now waits until the milestone is solid
+    - Set higher default verticesLimit in visualizer
+    - Update to Go 1.15
+
+### Removed
+
+    - Unused RefsInvalidBundles cache
+
+### Fixed
+
+    - Database revalidation
+    - Missing byte to trytes conversion in some error messages
+    - Make code more testable
+    - Adding autopeered neighbors as static neighbors
+    - CTPS calculation
+    - Spikes in conf.rate calculation
+    - Pruning
+    - Do not drop autopeering and "acceptAny" peers on peering.json change
+    - Index out of range in attachToTangle
+    - Deadlock in snapshotting and pruning
+    - Error reason for connection abort is now shown
+    - Peering configs now recognized via CLI
+    - Coordinator bootstrapping
+    - Milestone missing / Milestone updated panics
+    - Hash conflicts in the visualizer
+    - SupportedFeatureSets logic in handshake
+    - Websocket/dashboard deadlock
+    - Dashboard visualizer re-rendered to often
+    - Do not panic if snapshot creation is aborted
+    - Fix solid entry point indexes
+
+### Removed
+
+    - Unused defaults from config.json
+    - Graph plugin
+    - Monitor plugin
+    - Legacy gossip protocol
+    - Genesis tx special case
+
+### Config file changes
+
+Please use the new config.json and transfer values from your current config.json over to the new one, as a lot of keys have changed or got removed (instead of mutating your current one).
+
+
+## [0.4.2] - 22.07.2020
+
+### Added
+
+    - Snapshot download fallback sources (#568)
+
+### Changed
+
+    - Using --version instead of --help for checking if the docker image works
+    - Update autopeering entry nodes
+
+### Fixed
+
+    - Hiding of all non essential config flags
+    - Ignoring all entry nodes if one is not found
+    - Explicit --help/-h flag to print the help instead of using the built-in missing help flag error handling of pflag
+    - Missing trytes convertion to ledger panic logs
+
+### Config file changes
+
+`config.json`
+
+```diff
+- "downloadURL": "https://ls.manapotion.io/export.bin"
++ "downloadURLs": [
++   "https://ls.manapotion.io/export.bin",
++   "https://x-vps.com/export.bin",
++   "https://dbfiles.iota.org/mainnet/hornet/latest-export.bin"
++ ]
+
+  "entryNodes": [
+-   "46CstniGgfWMdAySiWuS7bVfugwuHZCUQKVaC4Y34EYJ@enter.hornet.zone:14626",
++   "FvfwJuCMoWJvcJLSYww7whPxouZ9WFJ55uyxTxKxJ1ez@enter.hornet.zone:14626",
+-   "2GHfjJhTqRaKCGBJJvS5RWty61XhjX7FtbVDhg7s8J1x@entrynode.tanglebay.org:14626",
+-   "iotaMk9Rg8wWo1DDeG7fwV9iJ41hvkwFX8w6MyTQgDu@enter.thetangle.org:14627"
++   "iotaMk9Rg8wWo1DDeG7fwV9iJ41hvkwFX8w6MyTQgDu@enter.thetangle.org:14627",
++   "12w9FrzMdDQ42aBgFrv1siHuJMhuZ4SMVHRFSS7Zb72W@entrynode.iotatoken.nl:14626",
++   "DboTc1v61Xdyvggj8VRszy92ScUTLgfwZaHvXsU8zr7e@entrynode.tanglebay.org:14626"
+  ],
+```
+
+`config_comnet.json`
+
+```diff
+- "downloadURL": "https://ls.tanglebay.org/comnet/export.bin"
++ "downloadURLs": [
++   "https://ls.manapotion.io/comnet/export.bin"
++ ]
+
+  "entryNodes": [
+-   "7Y1GSTTwJLMPCffNJhWggZPtwVce5hsgAVcHanNa6HXh@entrynode.comnet.tanglebay.org:14636",
+-   "FPE6kHwZhvw8g163faJwTaPzYePbYtaXhwpWxFKuJfEY@enter.comnet.hornet.zone:14627"
++   "GLZAWBGqvm6ZRT7jGMFAKyUJNPdvx4i5A1GPRZbGS6C9@enter.comnet.hornet.zone:14627",
++   "J1Hn5r9pS5FkLeYqXWstC2Zyjxj73grEWvjuene3qjM9@entrynode.comnet.tanglebay.org:14636"
+  ],
+```
+
+`config_devnet.json`
+
+```diff
+- "downloadURL": "https://dbfiles.iota.org/devnet/hornet/latest-export.bin"
++ "downloadURLs": [
++   "https://dbfiles.iota.org/devnet/hornet/latest-export.bin"
++ ]
+
+  "entryNodes": [
+-   "iotaDvNxMP5EPQPbHNzMTZK5ipd4BGZfjZBomenmyk3@enter.devnet.thetangle.org:14637"
++   "iotaDvNxMP5EPQPbHNzMTZK5ipd4BGZfjZBomenmyk3@enter.devnet.thetangle.org:14637",
++   "BqXajrWBFGYcJduK7kxiSMW3hv9fXRLzt9jK7JZZPAzp@entrynode.devnet.tanglebay.org:14646"
+  ],
+```
+
+## [0.4.1] - 30.06.2020
+
+### Added
+
+    - Config opts modifiable via CLI and env variables
+    - Config setting for warpsync advancement range
+    - Snapshots dir
+    - Dockerfile to build a local dev image
+    - Ability to let the Prometheus plugin create a 'file service discovery' file
+    - Snapshot index and Pruning index to Prometheus
+    - Flag to force load a global snapshot if db exists
+
+### Changed
+
+    - Comnet coo address
+    - Make database revalidation abortable
+    - Replace ComputeIfAbsent with Store to reduce IO pressure
+    - Updated mqtt lib
+    - Updated hive.go
+    - Wait until all txs of coo bundles are processed in the storage layer
+    - Use new merkle package from iota.go incl. "Shake" key derivation
+    - Updated rpm package
+    - Detach events
+    - README
+    - Bump to Go 1.14.4
+    - Coo plugin milestone validation
+    - Only check for pre-release updates if a pre-release version is running
+    - Autopeering seed encoding to base58
+    - Use tanglebay for comnet snapshots
+    - Updated external libs
+    - Increase shutdown time for big databases
+
+### Fixed
+
+    - Race condition in tryConstructBundle
+    - Remove unused modules (Dashboard)
+    - Missing tryte conversion
+    - Ignored autopeering max peers
+    - Dashboard issues
+    - IsStaticallyPeered check
+    - Missing ca-certificates in Docker files
+    - Check to prevent pruning of genesis tx
+    - Below max depth for SolidEntryPoints
+    - Gossip bind address for IPv6
+    - Synchronization with IRI nodes
+
+### Config file changes
+
+`config.json`
+
+```diff
+  "snapshots": {
+      "local": {
+-        "path": "export.bin",
++        "path": "snapshots/mainnet/export.bin",
+  },
+  "autopeering": {
+        "entryNodes": [
+-        "LehlDBPJ6kfcfLOK6kAU4nD7B/BdR7SJhai7yFCbCCM=@enter.hornet.zone:14626",
+-        "zEiNuQMDfZ6F8QDisa1ndX32ykBTyYCxbtkO0vkaWd0=@enter.manapotion.io:18626",
+-        "EsY+zvaselQYA33AVNzrYIGLplboIh4r8oO+vLKQAVM=@entrynode.tanglebay.org:14626"
++        "46CstniGgfWMdAySiWuS7bVfugwuHZCUQKVaC4Y34EYJ@enter.hornet.zone:14626",
++        "EkSLZ4uvSTED1x6KaGzqxoGxjbytt2rPVfbJk1LRLCGL@enter.manapotion.io:18626",
++        "2GHfjJhTqRaKCGBJJvS5RWty61XhjX7FtbVDhg7s8J1x@entrynode.tanglebay.org:14626",
++        "iotaMk9Rg8wWo1DDeG7fwV9iJ41hvkwFX8w6MyTQgDu@enter.thetangle.org:14627"
+        ],
+  },
++ "warpsync": {
++     "advancementRange": 200
++ },
+```
+
+`config_comnet.json`
+
+```diff
+  "snapshots": {
+      "local": {
+-        "path": "export_comnet.bin",
+-        "downloadURL": "https://ls.manapotion.io/comnet/export.bin"
++        "path": "snapshots/comnet/export.bin",
++        "downloadURL": "https://ls.tanglebay.org/comnet/export.bin"
+  },
+  "coordinator": {
+-    "address": "BODHQPXSMDNHBWVZHVATBAHQGZSKWQLXYZNOXMKNUCOZCPTWHHNFBBHFOEGPTWGGUVDJPZAYZIMXIIGVD",
++    "address": "YBWDHGHUEB9KSOPONTLTOSSKITIBE9MXPASCLREDNV9HEABYBPTHRQGWNJWQFSYAYZRDXXIOZHWBC9DWC",
+  },
+  "autopeering": {
+      "entryNodes": [
+-        "TANGLEleGqaMFFSTiyAV/vvdING/xuJNTDW16oCXZbo=@enter.comnet.thetangle.org:14641",
+-        "YRdteHJeawDw6UMw22yePwiQYlc1CsrmWhVljzfc6uw=@entrynode.comnet.tanglebay.org:14636",
+-        "1bU0uI+apA7YRna530e3SYfTDtUsobrLObt58pe5c5E=@enter.comnet.hornet.zone:14627"
++        "iotaCrvEWGfaeA1HutcULjD4uZnPhEnD5xNGfGs8vhe@enter.comnet.thetangle.org:14647",
++        "7Y1GSTTwJLMPCffNJhWggZPtwVce5hsgAVcHanNa6HXh@entrynode.comnet.tanglebay.org:14636",
++        "FPE6kHwZhvw8g163faJwTaPzYePbYtaXhwpWxFKuJfEY@enter.comnet.hornet.zone:14627"
+      ],
+  },
++ "warpsync": {
++   "advancementRange": 50
++ },
+```
+
+## [0.4.1-rc4] - 23.06.2020
+
+### Changed
+
+    - Use tanglebay for comnet snapshots
+    - Updated external libs
+    - Increase shutdown time for big databases
+
+### Fixed
+
+    - Slow sync
+    - Pruning
+
+### Config file changes
+
+`config_comnet.json`
+
+```diff
+ "snapshots": {
+-    "downloadURL": "https://ls.manapotion.io/comnet/export.bin"
++    "downloadURL": "https://ls.tanglebay.org/comnet/export.bin"
+ }
+```
+
+## [0.4.1-rc3] - 19.06.2020
+
+### Fixed
+
+    - Entry node public keys in config files
+
+### Config file changes
+
+`config.json`
+
+```diff
+"entryNodes": [
+-  "46CstniGgfWMdAySiWuS7bVfugwuHZCUQKVaC4Y34EYJ=@enter.hornet.zone:14626",
+-  "EkSLZ4uvSTED1x6KaGzqxoGxjbytt2rPVfbJk1LRLCGL=@enter.manapotion.io:18626",
+-  "2GHfjJhTqRaKCGBJJvS5RWty61XhjX7FtbVDhg7s8J1x=@entrynode.tanglebay.org:14626"
++  "46CstniGgfWMdAySiWuS7bVfugwuHZCUQKVaC4Y34EYJ@enter.hornet.zone:14626",
++  "EkSLZ4uvSTED1x6KaGzqxoGxjbytt2rPVfbJk1LRLCGL@enter.manapotion.io:18626",
++  "2GHfjJhTqRaKCGBJJvS5RWty61XhjX7FtbVDhg7s8J1x@entrynode.tanglebay.org:14626"
+],
+```
+
+`config_comnet.json`
+
+```diff
+"entryNodes": [
+-  "67it5aiegGwyLPSewfc2Bv42BvdRAdNjaGjf3VMhoG2u=@enter.comnet.thetangle.org:14641",
+-  "7Y1GSTTwJLMPCffNJhWggZPtwVce5hsgAVcHanNa6HXh=@entrynode.comnet.tanglebay.org:14636",
+-  "FPE6kHwZhvw8g163faJwTaPzYePbYtaXhwpWxFKuJfEY=@enter.comnet.hornet.zone:14627"
++  "67it5aiegGwyLPSewfc2Bv42BvdRAdNjaGjf3VMhoG2u@enter.comnet.thetangle.org:14641",
++  "7Y1GSTTwJLMPCffNJhWggZPtwVce5hsgAVcHanNa6HXh@entrynode.comnet.tanglebay.org:14636",
++  "FPE6kHwZhvw8g163faJwTaPzYePbYtaXhwpWxFKuJfEY@enter.comnet.hornet.zone:14627"
+],
+```
+
+## [0.4.1-rc2] - 18.06.2020
+
+### Added
+
+    - Config setting for warpsync advancement range
+    - Snapshot index and Pruning index to Prometheus
+    - Flag to force load a global snapshot if db exists
+
+### Changed
+
+    - Coo plugin milestone validation
+    - Only check for pre-release updates if a pre-release version is running
+    - Autopeering seed encoding to base58
+
+### Fixed
+
+    - Missing snapshot dir
+    - Node does not sync after restart
+    - Check to prevent pruning of genesis tx
+    - Below max depth for SolidEntryPoints
+    - Gossip bind address for IPv6
+    - Synchronization with IRI nodes
+
+### Config file changes
+
+`config.json`
+
+```diff
++"warpsync": {
++  "advancementRange": 200
++},
+
+"entryNodes": [
+-  "LehlDBPJ6kfcfLOK6kAU4nD7B/BdR7SJhai7yFCbCCM=@enter.hornet.zone:14626",
+-  "zEiNuQMDfZ6F8QDisa1ndX32ykBTyYCxbtkO0vkaWd0=@enter.manapotion.io:18626",
+-  "EsY+zvaselQYA33AVNzrYIGLplboIh4r8oO+vLKQAVM=@entrynode.tanglebay.org:14626"
++  "46CstniGgfWMdAySiWuS7bVfugwuHZCUQKVaC4Y34EYJ=@enter.hornet.zone:14626",
++  "EkSLZ4uvSTED1x6KaGzqxoGxjbytt2rPVfbJk1LRLCGL=@enter.manapotion.io:18626",
++  "2GHfjJhTqRaKCGBJJvS5RWty61XhjX7FtbVDhg7s8J1x=@entrynode.tanglebay.org:14626"
+],
+```
+
+`config_comnet.json`
+
+```diff
++"warpsync": {
++  "advancementRange": 50
++},
+
+"entryNodes": [
+-  "TANGLEleGqaMFFSTiyAV/vvdING/xuJNTDW16oCXZbo=@enter.comnet.thetangle.org:14641",
+-  "YRdteHJeawDw6UMw22yePwiQYlc1CsrmWhVljzfc6uw=@entrynode.comnet.tanglebay.org:14636",
+-  "1bU0uI+apA7YRna530e3SYfTDtUsobrLObt58pe5c5E=@enter.comnet.hornet.zone:14627"
++  "67it5aiegGwyLPSewfc2Bv42BvdRAdNjaGjf3VMhoG2u=@enter.comnet.thetangle.org:14641",
++  "7Y1GSTTwJLMPCffNJhWggZPtwVce5hsgAVcHanNa6HXh=@entrynode.comnet.tanglebay.org:14636",
++  "FPE6kHwZhvw8g163faJwTaPzYePbYtaXhwpWxFKuJfEY=@enter.comnet.hornet.zone:14627"
+],
+```
+
+## [0.4.1-rc1] - 12.06.2020
+
+### Added
+
+    - Config opts modifiable via CLI and env variables
+    - Snapshots dir
+    - Dockerfile to build a local dev image
+    - Ability to let the Prometheus plugin create a 'file service discovery' file
+
+### Changed
+
+    - Comnet coo address
+    - Make database revalidation abortable
+    - Replace ComputeIfAbsent with Store to reduce IO pressure
+    - Updated mqtt lib
+    - Updated hive.go
+    - Wait until all txs of coo bundles are processed in the storage layer
+    - Use new merkle package from iota.go incl. "Shake" key derivation
+    - Updated rpm package
+    - Detach events
+    - README
+    - Bump to Go 1.14.4
+
+### Fixed
+
+    - Race condition in tryConstructBundle
+    - Remove unused modules (Dashboard)
+    - Missing tryte conversion
+    - Ignored autopeering max peers
+    - Dashboard issues
+    - IsStaticallyPeered check
+    - Missing ca-certificates in Docker files
+
+### Config file changes
+
+`config.json`
+
+```diff
+-      "path": "export.bin",
++      "path": "snapshots/mainnet/export.bin",
+```
+
+`config_comnet.json`
+
+```diff
+-      "path": "export_comnet.bin",
++      "path": "snapshots/comnet/export.bin",
+
+"coordinator": {
+-    "address": "BODHQPXSMDNHBWVZHVATBAHQGZSKWQLXYZNOXMKNUCOZCPTWHHNFBBHFOEGPTWGGUVDJPZAYZIMXIIGVD",
++    "address": "YBWDHGHUEB9KSOPONTLTOSSKITIBE9MXPASCLREDNV9HEABYBPTHRQGWNJWQFSYAYZRDXXIOZHWBC9DWC",
+}
+```
+
+## [0.4.0] - 05.06.2020
+
+### Added
+
+    - Autopeering
+    - Object storage (speed and memory improvement)
+    - Warp synchronization (high speed syncing)
+    - Coordinator plugin
+    - Database re-validation after a crash
+    - Add API IP whitelist
+    - Additional neighbors stats
+    - Dashboard:
+      - `bundle not found` alert
+      - `unknown Tx` alert
+      - GitHub mark linking to github
+      - Dark theme
+      - Explorer JSON view
+      - Explorer text view
+      - `Tag` search
+      - Show approvers in tx explorer
+      - Copy transaction hash
+      - Copy transaction raw trytes
+      - CTPS graph
+      - Tooltip for copy buttons
+      - Responsive design
+      - Visualizer (ported from GoShimmer)
+      - Spam transactions graph
+      - Show IOTA units
+      - Value-tx only filter
+      - Average metrics to confirmed milestones
+      - Spam metrics
+    - API:
+      - `pruneDatabase` call
+      - `getLedgerState` call
+      - `getFundsOnSpentAddresses` call
+      - Health check API route (`/healthz`)
+    - Dockerfiles for arm64
+    - Neighbor alias
+    - Node alias (Dashboard and `getNodeInfo`)
+    - Profiles configuration file
+    - Check for missing snapshot info
+    - Balance check on snapshot import
+    - Toolset (Autopeering seed generator, Password SHA256 sum, Coo plugin tool)
+    - Snapshot file download when no local snapshot is found
+    - Set coordinator address in database
+    - Default comnet settings
+    - New zmq and mqtt topics (`lm` & `lsm`)
+    - Flag to overwrite coo address at startup
+    - Show download speed
+    - Prometheus exporter plugin
+    - Value spam mode (spammer plugin)
+
+### Removed
+
+    - `in-flight` neighbor pool
+    - Socket.io in favor of hive.go websockethub
+    - Auto snapshot download from nfpm service file
+    - Wrong `omitempty` from json tags
+    - `getSnapshot` API call
+    - armhf support
+    - Unnecessary trinary <--> binary conversions (speed improvement)
+
+### Changed
+
+    - Database layout
+    - Ignore example neighbor
+    - Improved RPM and DEB packages
+    - Make config files optional
+    - Refactored configuration options
+    - Reintroduce spent addresses DB
+    - Snapshot format
+    - `tx_trytes` ZMQ and MQTT topic changed to `trytes`
+    - Debian package structure
+    - Do not broadcast known tx
+    - Use new object storage interface
+    - Refactors networking packages and plugins
+    - Send integer values as integers in MQTT topics
+    - Renamed packages to pkg
+    - Improve solidifier
+    - Local snapshots are always enabled now
+    - Simplify node sync check
+    - Do not start HORNET automatically during an initial installation with the DEB package
+    - Milestone logic
+    - Pruning logic
+    - Database pressure reduced
+    - Renamed `ZeroMQ` plugin to `ZMQ`
+    - Graph explorer link is now configurable
+    - Improved spammer plugin
+    - Local snapshot doesn't write to database if triggered externally
+    - API:
+      - Handle `minWeightMagnitude` as an optional parameter
+      - Renamed `createSnapshot` to `createSnapshotFile`
+      - Improved error handling in `createSnapshotFile`
+    - Set latest known milestone at startup
+    - Abort ongoing PoW in spammer on shutdown
+    - Reasonable values for config defaults
+    - Increase tipselect maxDepth to 5
+
+### Fixed
+
+    - Allow all orders of txs in attachToTangle
+    - API getNodeInfo features is `null`
+    - Graph plugin
+    - Monitor plugin
+    - Missing comma in MQTT TX event
+    - Missing folder in `.deb` package
+    - Updated profiles for better RAM usage
+    - ZMQ panics on greeting
+    - Scheme for jquery url in monitor plugin
+    - HTTP API basic auth
+    - High memory usage
+    - URL scheme in monitor and graph plugin
+    - Local peer string character encoding
+    - snapshot.csv reading
+    - Heartbeats
+    - ZMQ `address` topic
+    - Security fixes
+
+### Config file changes
+
+Please use the new config.json and transfer values from your current config.json over to the new one, as a lot of keys have changed (instead of mutating your current one).
+
+## [0.4.0-rc13] - 01.06.2020
+
+### Changed
+
+    - Removed unnecessary trinary <--> binary conversions (speed improvement)
+
+### Fixed
+
+    - File ownership (APT install)
+
 ## [0.4.0-rc12] - 29.05.2020
 
 ### Added

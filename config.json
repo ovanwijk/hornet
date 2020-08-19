@@ -12,6 +12,7 @@
       "getNodeInfo",
       "getBalances",
       "checkConsistency",
+      "getTipInfo",
       "getTransactionsToApprove",
       "getInclusionStates",
       "getNodeAPIConfiguration",
@@ -33,7 +34,6 @@
   "dashboard": {
     "bindAddress": "localhost:8081",
     "theme": "default",
-    "dev": false,
     "basicAuth": {
       "enabled": false,
       "username": "",
@@ -41,18 +41,17 @@
       "passwordSalt": ""
     }
   },
-  "db": {
-    "path": "mainnetdb",
-    "debug": false
-  },
   "snapshots": {
     "loadType": "local",
     "local": {
-      "depth": 50,
       "intervalSynced": 50,
       "intervalUnsynced": 1000,
-      "path": "export.bin",
-      "downloadURL": "https://ls.manapotion.io/export.bin"
+      "path": "snapshots/mainnet/export.bin",
+      "downloadURLs": [
+        "https://ls.manapotion.io/export.bin",
+        "https://x-vps.com/export.bin",
+        "https://dbfiles.iota.org/mainnet/hornet/latest-export.bin"
+      ]
     },
     "global": {
       "path": "snapshotMainnet.txt",
@@ -65,21 +64,11 @@
     },
     "pruning": {
       "enabled": true,
-      "delay": 40000
+      "delay": 15000
     }
   },
   "spentAddresses": {
     "enabled": true
-  },
-  "coordinator": {
-    "address": "EQSAUZXULTTYZCLNJNTXQTQHOMOFZERHTCGTXOLTVAHKSA9OGAZDEKECURBRIXIJWNPFCQIOVFVVXJVD9",
-    "securityLevel": 2,
-    "merkleTreeDepth": 23,
-    "mwm": 14,
-    "stateFilePath": "coordinator.state",
-    "merkleTreeFilePath": "coordinator.tree",
-    "intervalSeconds": 60,
-    "checkpointTransactions": 5
   },
   "network": {
     "preferIPv6": false,
@@ -91,16 +80,15 @@
       "bindAddress": "0.0.0.0:14626",
       "runAsEntryNode": false,
       "entryNodes": [
-        "LehlDBPJ6kfcfLOK6kAU4nD7B/BdR7SJhai7yFCbCCM=@enter.hornet.zone:14626",
-        "zEiNuQMDfZ6F8QDisa1ndX32ykBTyYCxbtkO0vkaWd0=@enter.manapotion.io:18626",
-        "npLI53UCxBvOJaV0xv/mzWuV+f+pduc6GzE83jM/5uo=@entrynode.tanglebay.org:14626"
+        "FvfwJuCMoWJvcJLSYww7whPxouZ9WFJ55uyxTxKxJ1ez@enter.hornet.zone:14626",
+        "EkSLZ4uvSTED1x6KaGzqxoGxjbytt2rPVfbJk1LRLCGL@enter.manapotion.io:18626",
+        "iotaMk9Rg8wWo1DDeG7fwV9iJ41hvkwFX8w6MyTQgDu@enter.thetangle.org:14627",
+        "12w9FrzMdDQ42aBgFrv1siHuJMhuZ4SMVHRFSS7Zb72W@entrynode.iotatoken.nl:14626",
+        "DboTc1v61Xdyvggj8VRszy92ScUTLgfwZaHvXsU8zr7e@entrynode.tanglebay.org:14626",
+        "31Tz9meznQMm7qSDUgyMmYVeHUCGA7za5Suvbom5hpE9@bender.iota.autopeering.com:14626"
       ],
       "seed": ""
     }
-  },
-  "tipsel": {
-    "belowMaxDepthTransactionLimit": 20000,
-    "maxDepth": 3
   },
   "node": {
     "alias": "",
@@ -108,49 +96,17 @@
     "disablePlugins": [],
     "enablePlugins": []
   },
-  "logger": {
-    "level": "info",
-    "disableCaller": true,
-    "encoding": "console",
-    "outputPaths": [
-      "stdout"
-    ]
-  },
   "spammer": {
     "address": "HORNET99INTEGRATED99SPAMMER999999999999999999999999999999999999999999999999999999",
-    "depth": 1,
     "message": "Spamming with HORNET tipselect",
     "tag": "HORNET99INTEGRATED99SPAMMER",
+    "tagSemiLazy": "",
     "cpuMaxUsage": 0.8,
     "tpsRateLimit": 0.0,
     "bundleSize": 1,
     "valueSpam": false,
-    "workers": 0
-  },
-  "graph": {
-    "webRootPath": "IOTAtangle/webroot",
-    "domain": "",
-    "webSocket": {
-      "uri": ""
-    },
-    "bindAddress": "localhost:8083",
-    "networkName": "meets HORNET",
-    "explorerTxLink": "http://localhost:8081/explorer/tx/",
-    "explorerBundleLink": "http://localhost:8081/explorer/bundle/"
-  },
-  "monitor": {
-    "tangleMonitorPath": "tanglemonitor/frontend",
-    "domain": "",
-    "initialTransactions": 15000,
-    "remoteApiPort": 4433,
-    "webBindAddress": "localhost:4434",
-    "apiBindAddress": "localhost:4433",
-    "webSocket": {
-      "uri": ""
-    }
-  },
-  "mqtt": {
-    "config": "mqtt_config.json"
+    "workers": 0,
+    "semiLazyTipsLimit": 30
   },
   "zmq": {
     "bindAddress": "localhost:5556"

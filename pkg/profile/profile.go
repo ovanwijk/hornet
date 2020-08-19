@@ -7,17 +7,20 @@ import (
 	"sync"
 
 	"github.com/shirou/gopsutil/mem"
+	flag "github.com/spf13/pflag"
 
 	"github.com/gohornet/hornet/pkg/config"
 )
 
 const (
+	// AutoProfileName is the name of the automatic profile.
 	AutoProfileName = "auto"
-	CfgUseProfile   = "useProfile"
+	// CfgUseProfile is the key to set the profile to use.
+	CfgUseProfile = "useProfile"
 )
 
 func init() {
-	config.NodeConfig.SetDefault(CfgUseProfile, AutoProfileName)
+	flag.StringP(CfgUseProfile, "p", AutoProfileName, "Sets the profile with which the node runs")
 }
 
 var (
@@ -153,14 +156,6 @@ var Profile8GB = &Profile{
 				MaxConsumerHoldTimeSec: 100,
 			},
 		},
-		RefsInvalidBundle: CacheOpts{
-			CacheTimeMs: 180000,
-			LeakDetectionOptions: LeakDetectionOpts{
-				Enabled:                false,
-				MaxConsumersPerObject:  20,
-				MaxConsumerHoldTimeSec: 100,
-			},
-		},
 		SpentAddresses: CacheOpts{
 			CacheTimeMs: 0,
 			LeakDetectionOptions: LeakDetectionOpts{
@@ -240,14 +235,6 @@ var Profile4GB = &Profile{
 		},
 		IncomingTransactionFilter: CacheOpts{
 			CacheTimeMs: 5000,
-			LeakDetectionOptions: LeakDetectionOpts{
-				Enabled:                false,
-				MaxConsumersPerObject:  20,
-				MaxConsumerHoldTimeSec: 100,
-			},
-		},
-		RefsInvalidBundle: CacheOpts{
-			CacheTimeMs: 180000,
 			LeakDetectionOptions: LeakDetectionOpts{
 				Enabled:                false,
 				MaxConsumersPerObject:  20,
@@ -339,14 +326,6 @@ var Profile2GB = &Profile{
 				MaxConsumerHoldTimeSec: 100,
 			},
 		},
-		RefsInvalidBundle: CacheOpts{
-			CacheTimeMs: 180000,
-			LeakDetectionOptions: LeakDetectionOpts{
-				Enabled:                false,
-				MaxConsumersPerObject:  20,
-				MaxConsumerHoldTimeSec: 100,
-			},
-		},
 		SpentAddresses: CacheOpts{
 			CacheTimeMs: 0,
 			LeakDetectionOptions: LeakDetectionOpts{
@@ -432,14 +411,6 @@ var Profile1GB = &Profile{
 				MaxConsumerHoldTimeSec: 100,
 			},
 		},
-		RefsInvalidBundle: CacheOpts{
-			CacheTimeMs: 180000,
-			LeakDetectionOptions: LeakDetectionOpts{
-				Enabled:                false,
-				MaxConsumersPerObject:  20,
-				MaxConsumerHoldTimeSec: 100,
-			},
-		},
 		SpentAddresses: CacheOpts{
 			CacheTimeMs: 0,
 			LeakDetectionOptions: LeakDetectionOpts{
@@ -465,7 +436,6 @@ type Caches struct {
 	Milestones                CacheOpts `mapstructure:"milestones"`
 	Transactions              CacheOpts `mapstructure:"transactions"`
 	IncomingTransactionFilter CacheOpts `mapstructure:"incomingTransactionFilter"`
-	RefsInvalidBundle         CacheOpts `mapstructure:"refsInvalidBundle"`
 	UnconfirmedTx             CacheOpts `mapstructure:"unconfirmedTx"`
 	SpentAddresses            CacheOpts `mapstructure:"spentAddresses"`
 }

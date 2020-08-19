@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"time"
 
-	"github.com/iotaledger/iota.go/trinary"
-
 	"github.com/iotaledger/hive.go/kvstore"
 	"github.com/iotaledger/hive.go/objectstorage"
 
@@ -33,11 +31,8 @@ func (c *CachedUnconfirmedTx) GetUnconfirmedTx() *hornet.UnconfirmedTx {
 }
 
 func unconfirmedTxFactory(key []byte) (objectstorage.StorableObject, int, error) {
-	unconfirmedTx := &hornet.UnconfirmedTx{
-		LatestMilestoneIndex: milestone.Index(binary.LittleEndian.Uint32(key[:4])),
-		TxHash:               make([]byte, 49),
-	}
-	copy(unconfirmedTx.TxHash, key[4:])
+
+	unconfirmedTx := hornet.NewUnconfirmedTx(milestone.Index(binary.LittleEndian.Uint32(key[:4])), key[4:53])
 	return unconfirmedTx, 53, nil
 }
 
@@ -45,9 +40,7 @@ func GetUnconfirmedTxStorageSize() int {
 	return unconfirmedTxStorage.GetSize()
 }
 
-func configureUnconfirmedTxStorage(store kvstore.KVStore) {
-
-	opts := profile.LoadProfile().Caches.UnconfirmedTx
+func configureUnconfirmedTxStorage(store kvstore.KVStore, opts profile.CacheOpts) {
 
 	unconfirmedTxStorage = objectstorage.New(
 		store.WithRealm([]byte{StorePrefixUnconfirmedTransactions}),
@@ -56,6 +49,7 @@ func configureUnconfirmedTxStorage(store kvstore.KVStore) {
 		objectstorage.PersistenceEnabled(true),
 		objectstorage.PartitionKey(4, 49),
 		objectstorage.KeysOnly(true),
+		objectstorage.StoreOnCreation(true),
 		objectstorage.LeakDetectionEnabled(opts.LeakDetectionOptions.Enabled,
 			objectstorage.LeakDetectionOptions{
 				MaxConsumersPerObject: opts.LeakDetectionOptions.MaxConsumersPerObject,
@@ -64,41 +58,40 @@ func configureUnconfirmedTxStorage(store kvstore.KVStore) {
 	)
 }
 
-// GetUnconfirmedTxHashBytes returns all hashes of unconfirmed transactions for that milestone.
-func GetUnconfirmedTxHashBytes(msIndex milestone.Index, forceRelease bool) [][]byte {
+// GetUnconfirmedTxHashes returns all hashes of unconfirmed transactions for that milestone.
+func GetUnconfirmedTxHashes(msIndex milestone.Index, forceRelease bool) hornet.Hashes {
 
-	var unconfirmedTxHashBytes [][]byte
+	var unconfirmedTxHashes hornet.Hashes
 
 	key := make([]byte, 4)
 	binary.LittleEndian.PutUint32(key, uint32(msIndex))
 
 	unconfirmedTxStorage.ForEachKeyOnly(func(key []byte) bool {
-		unconfirmedTxHashBytes = append(unconfirmedTxHashBytes, key[4:])
+		unconfirmedTxHashes = append(unconfirmedTxHashes, hornet.Hash(key[4:53]))
 		return true
 	}, false, key)
 
-	return unconfirmedTxHashBytes
+	return unconfirmedTxHashes
+}
+
+// UnconfirmedTxConsumer consumes the given unconfirmed transaction during looping through all unconfirmed transactions in the persistence layer.
+type UnconfirmedTxConsumer func(msIndex milestone.Index, txHash hornet.Hash) bool
+
+// ForEachUnconfirmedTx loops over all unconfirmed transactions.
+func ForEachUnconfirmedTx(consumer UnconfirmedTxConsumer, skipCache bool) {
+	unconfirmedTxStorage.ForEachKeyOnly(func(key []byte) bool {
+		return consumer(milestone.Index(binary.LittleEndian.Uint32(key[:4])), key[4:53])
+	}, skipCache)
 }
 
 // unconfirmedTx +1
-func StoreUnconfirmedTx(msIndex milestone.Index, txHash trinary.Hash) *CachedUnconfirmedTx {
-
-	unconfirmedTx := &hornet.UnconfirmedTx{
-		LatestMilestoneIndex: msIndex,
-		TxHash:               trinary.MustTrytesToBytes(txHash)[:49],
-	}
-
-	cachedObj := unconfirmedTxStorage.ComputeIfAbsent(unconfirmedTx.ObjectStorageKey(), func(key []byte) objectstorage.StorableObject { // unconfirmedTx +1
-		unconfirmedTx.Persist()
-		unconfirmedTx.SetModified()
-		return unconfirmedTx
-	})
-
-	return &CachedUnconfirmedTx{CachedObject: cachedObj}
+func StoreUnconfirmedTx(msIndex milestone.Index, txHash hornet.Hash) *CachedUnconfirmedTx {
+	unconfirmedTx := hornet.NewUnconfirmedTx(msIndex, txHash)
+	return &CachedUnconfirmedTx{CachedObject: unconfirmedTxStorage.Store(unconfirmedTx)}
 }
 
 // DeleteUnconfirmedTxs deletes unconfirmed transaction entries.
-func DeleteUnconfirmedTxs(msIndex milestone.Index) {
+func DeleteUnconfirmedTxs(msIndex milestone.Index) int {
 
 	msIndexBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(msIndexBytes, uint32(msIndex))
@@ -113,6 +106,8 @@ func DeleteUnconfirmedTxs(msIndex milestone.Index) {
 	for _, key := range keysToDelete {
 		unconfirmedTxStorage.Delete(key)
 	}
+
+	return len(keysToDelete)
 }
 
 func ShutdownUnconfirmedTxsStorage() {

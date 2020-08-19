@@ -10,9 +10,9 @@ import (
 
 	"github.com/iotaledger/iota.go/address"
 	"github.com/iotaledger/iota.go/consts"
-	"github.com/iotaledger/iota.go/trinary"
 
 	"github.com/gohornet/hornet/pkg/config"
+	"github.com/gohornet/hornet/pkg/model/hornet"
 	"github.com/gohornet/hornet/pkg/model/milestone"
 	"github.com/gohornet/hornet/pkg/model/tangle"
 	tanglePlugin "github.com/gohornet/hornet/plugins/tangle"
@@ -37,7 +37,7 @@ func loadSpentAddresses(filePathSpent string) (int, error) {
 			return 0, err
 		}
 
-		if tangle.MarkAddressAsSpent(addr) {
+		if tangle.MarkAddressAsSpent(hornet.HashFromAddressTrytes(addr)) {
 			spentAddressesCount++
 		}
 	}
@@ -52,11 +52,17 @@ func loadSpentAddresses(filePathSpent string) (int, error) {
 
 func loadSnapshotFromTextfiles(filePathLedger string, filePathsSpent []string, snapshotIndex milestone.Index) error {
 
+	latestMilestoneFromDatabase := tangle.SearchLatestMilestoneIndexInStore()
+	if latestMilestoneFromDatabase > snapshotIndex {
+		return errors.Wrapf(ErrSnapshotImportFailed, "Milestone in database (%d) newer than snapshot milestone (%d)", latestMilestoneFromDatabase, snapshotIndex)
+	}
+
 	tangle.WriteLockSolidEntryPoints()
 	tangle.ResetSolidEntryPoints()
 
-	// Genesis transaction
-	tangle.SolidEntryPointsAdd(consts.NullHashTrytes, snapshotIndex)
+	// Genesis transaction must be marked as SEP with snapshot index during loading a global snapshot,
+	// because coordinator bootstraps the network by referencing the genesis tx
+	tangle.SolidEntryPointsAdd(hornet.NullHashBytes, snapshotIndex)
 	tangle.StoreSolidEntryPoints()
 	tangle.WriteUnlockSolidEntryPoints()
 
@@ -68,7 +74,7 @@ func loadSnapshotFromTextfiles(filePathLedger string, filePathsSpent []string, s
 	}
 	defer ledgerFile.Close()
 
-	ledgerState := make(map[trinary.Hash]uint64)
+	ledgerState := make(map[string]uint64)
 	scanner := bufio.NewScanner(ledgerFile)
 
 	for scanner.Scan() {
@@ -88,7 +94,7 @@ func loadSnapshotFromTextfiles(filePathLedger string, filePathsSpent []string, s
 			return errors.Wrapf(ErrSnapshotImportFailed, "ParseUint: %v", err)
 		}
 
-		ledgerState[addr] = balance
+		ledgerState[string(hornet.HashFromAddressTrytes(addr))] = balance
 	}
 	if err := scanner.Err(); err != nil {
 		return errors.Wrapf(ErrSnapshotImportFailed, "Scanner: %v", err)
@@ -125,7 +131,8 @@ func loadSnapshotFromTextfiles(filePathLedger string, filePathsSpent []string, s
 	}
 
 	spentAddrEnabled := (spentAddressesSum != 0) || ((snapshotIndex == 0) && config.NodeConfig.GetBool(config.CfgSpentAddressesEnabled))
-	tangle.SetSnapshotMilestone(config.NodeConfig.GetString(config.CfgCoordinatorAddress)[:81], consts.NullHashTrytes, snapshotIndex, snapshotIndex, snapshotIndex, 0, spentAddrEnabled)
+	coordinatorAddress := hornet.HashFromAddressTrytes(config.NodeConfig.GetString(config.CfgCoordinatorAddress))
+	tangle.SetSnapshotMilestone(coordinatorAddress, hornet.NullHashBytes, snapshotIndex, snapshotIndex, snapshotIndex, 0, spentAddrEnabled)
 	tangle.SetLatestSeenMilestoneIndexFromSnapshot(snapshotIndex)
 
 	// set the solid milestone index based on the snapshot milestone

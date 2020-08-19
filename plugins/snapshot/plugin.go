@@ -1,16 +1,14 @@
 package snapshot
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
-
-	"github.com/iotaledger/iota.go/consts"
-	"github.com/iotaledger/iota.go/transaction"
-	"github.com/iotaledger/iota.go/trinary"
 
 	"github.com/iotaledger/hive.go/daemon"
 	"github.com/iotaledger/hive.go/events"
@@ -18,7 +16,6 @@ import (
 	"github.com/iotaledger/hive.go/node"
 	"github.com/iotaledger/hive.go/syncutils"
 
-	"github.com/gohornet/hornet/pkg/compressed"
 	"github.com/gohornet/hornet/pkg/config"
 	"github.com/gohornet/hornet/pkg/model/hornet"
 	"github.com/gohornet/hornet/pkg/model/milestone"
@@ -33,10 +30,12 @@ var (
 	log    *logger.Logger
 
 	overwriteCooAddress = pflag.Bool("overwriteCooAddress", false, "apply new coordinator address from config file to database")
+	forceGlobalSnapshot = pflag.Bool("forceGlobalSnapshot", false, "force loading of a global snapshot, even if a database already exists")
 
 	ErrNoSnapshotSpecified             = errors.New("no snapshot file was specified in the config")
-	ErrNoSnapshotDownloadURL           = fmt.Errorf("no download URL given for local snapshot under config option '%s", config.CfgLocalSnapshotsDownloadURL)
+	ErrNoSnapshotDownloadURL           = fmt.Errorf("no download URL given for local snapshot under config option '%s", config.CfgLocalSnapshotsDownloadURLs)
 	ErrSnapshotDownloadWasAborted      = errors.New("snapshot download was aborted")
+	ErrSnapshotDownloadNoValidSource   = errors.New("no valid source found, snapshot download not possible")
 	ErrSnapshotImportWasAborted        = errors.New("snapshot import was aborted")
 	ErrSnapshotImportFailed            = errors.New("snapshot import failed")
 	ErrSnapshotCreationWasAborted      = errors.New("operation was aborted")
@@ -67,7 +66,6 @@ var (
 
 func configure(plugin *node.Plugin) {
 	log = logger.NewLogger(plugin.Name)
-	installGenesisTransaction()
 
 	snapshotDepth = milestone.Index(config.NodeConfig.GetInt(config.CfgLocalSnapshotsDepth))
 	if snapshotDepth < SolidEntryPointCheckThresholdFuture {
@@ -89,26 +87,35 @@ func configure(plugin *node.Plugin) {
 
 	snapshotInfo := tangle.GetSnapshotInfo()
 	if snapshotInfo != nil {
+		coordinatorAddress := hornet.HashFromAddressTrytes(config.NodeConfig.GetString(config.CfgCoordinatorAddress))
+
 		// Check coordinator address in database
-		if snapshotInfo.CoordinatorAddress != config.NodeConfig.GetString(config.CfgCoordinatorAddress)[:81] {
+		if !bytes.Equal(snapshotInfo.CoordinatorAddress, coordinatorAddress) {
 			if !*overwriteCooAddress {
-				log.Panic(errors.Wrapf(ErrWrongCoordinatorAddressDatabase, "%v != %v", snapshotInfo.CoordinatorAddress, config.NodeConfig.GetString(config.CfgCoordinatorAddress)[:81]))
+				log.Panic(errors.Wrapf(ErrWrongCoordinatorAddressDatabase, "%v != %v", snapshotInfo.CoordinatorAddress.Trytes(), config.NodeConfig.GetString(config.CfgCoordinatorAddress)))
 			}
 
 			// Overwrite old coordinator address
-			snapshotInfo.CoordinatorAddress = config.NodeConfig.GetString(config.CfgCoordinatorAddress)[:81]
+			snapshotInfo.CoordinatorAddress = coordinatorAddress
 			tangle.SetSnapshotInfo(snapshotInfo)
 		}
 
-		// Check the ledger state
-		tangle.GetLedgerStateForLSMI(nil)
-		return
+		if !*forceGlobalSnapshot {
+			// If we don't enforce loading of a global snapshot,
+			// we can check the ledger state of current database and start the node.
+			tangle.GetLedgerStateForLSMI(nil)
+			return
+		}
+	}
+
+	snapshotTypeToLoad := strings.ToLower(config.NodeConfig.GetString(config.CfgSnapshotLoadType))
+
+	if *forceGlobalSnapshot && snapshotTypeToLoad != "global" {
+		log.Fatalf("global snapshot enforced but wrong snapshot type under config option '%s': %s", config.CfgSnapshotLoadType, config.NodeConfig.GetString(config.CfgSnapshotLoadType))
 	}
 
 	var err = ErrNoSnapshotSpecified
-
-	snapshotTypeToLoad := config.NodeConfig.GetString(config.CfgSnapshotLoadType)
-	switch strings.ToLower(snapshotTypeToLoad) {
+	switch snapshotTypeToLoad {
 	case "global":
 		if path := config.NodeConfig.GetString(config.CfgGlobalSnapshotPath); path != "" {
 			err = LoadGlobalSnapshot(path,
@@ -119,9 +126,13 @@ func configure(plugin *node.Plugin) {
 		if path := config.NodeConfig.GetString(config.CfgLocalSnapshotsPath); path != "" {
 
 			if _, fileErr := os.Stat(path); os.IsNotExist(fileErr) {
-				if url := config.NodeConfig.GetString(config.CfgLocalSnapshotsDownloadURL); url != "" {
-					log.Infof("Downloading snapshot from %s", url)
-					downloadErr := downloadSnapshotFile(path, url)
+				// create dir if it not exists
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					log.Fatalf("could not create snapshot dir '%s'", path)
+				}
+				if urls := config.NodeConfig.GetStringSlice(config.CfgLocalSnapshotsDownloadURLs); len(urls) > 0 {
+					log.Infof("Downloading snapshot from one of the provided sources %v", urls)
+					downloadErr := downloadSnapshotFile(path, urls)
 					if downloadErr != nil {
 						err = errors.Wrap(downloadErr, "Error downloading snapshot file")
 						break
@@ -136,7 +147,7 @@ func configure(plugin *node.Plugin) {
 			err = LoadSnapshotFromFile(path)
 		}
 	default:
-		log.Fatalf("invalid snapshot type under config option '%s': %s", config.CfgSnapshotLoadType, snapshotTypeToLoad)
+		log.Fatalf("invalid snapshot type under config option '%s': %s", config.CfgSnapshotLoadType, config.NodeConfig.GetString(config.CfgSnapshotLoadType))
 	}
 
 	if err != nil {
@@ -190,6 +201,7 @@ func run(_ *node.Plugin) {
 				if pruningEnabled {
 					if solidMilestoneIndex <= pruningDelay {
 						// Not enough history
+						localSnapshotLock.Unlock()
 						return
 					}
 
@@ -221,17 +233,4 @@ func PruneDatabaseByTargetIndex(targetIndex milestone.Index) error {
 	defer localSnapshotLock.Unlock()
 
 	return pruneDatabase(targetIndex, nil)
-}
-
-func installGenesisTransaction() {
-	// ensure genesis transaction exists
-	genesisTxTrits := make(trinary.Trits, consts.TransactionTrinarySize)
-	genesis, _ := transaction.ParseTransaction(genesisTxTrits, true)
-	genesis.Hash = consts.NullHashTrytes
-	txBytesTruncated := compressed.TruncateTx(trinary.MustTritsToBytes(genesisTxTrits))
-	genesisTx := hornet.NewTransaction(genesis, txBytesTruncated)
-
-	// ensure the bundle is also existent for the genesis tx
-	cachedTx, _ := tangle.AddTransactionToStorage(genesisTx, 0, false, false, true)
-	cachedTx.Release() // tx -1
 }

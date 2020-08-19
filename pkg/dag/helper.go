@@ -1,10 +1,11 @@
 package dag
 
 import (
+	"bytes"
+
 	"github.com/pkg/errors"
 
-	"github.com/iotaledger/iota.go/trinary"
-
+	"github.com/gohornet/hornet/pkg/model/hornet"
 	"github.com/gohornet/hornet/pkg/model/tangle"
 )
 
@@ -12,119 +13,85 @@ var (
 	ErrFindAllTailsFailed = errors.New("Unable to find all tails")
 )
 
-func FindAllTails(txHash trinary.Hash, forceRelease bool) (map[string]struct{}, error) {
+// FindAllTails searches all tail transactions the given startTxHash references.
+// If skipStartTx is true, the startTxHash will be ignored and traversed, even if it is a tail transaction.
+func FindAllTails(startTxHash hornet.Hash, skipStartTx bool, forceRelease bool) (map[string]struct{}, error) {
 
-	txsToTraverse := make(map[string]struct{})
-	txsChecked := make(map[string]struct{})
 	tails := make(map[string]struct{})
 
-	txsToTraverse[txHash] = struct{}{}
+	err := TraverseApprovees(startTxHash,
+		// traversal stops if no more transactions pass the given condition
+		// Caution: condition func is not in DFS order
+		func(cachedTxMeta *tangle.CachedMetadata) (bool, error) { // meta +1
+			defer cachedTxMeta.Release(true) // meta -1
 
-	// Collect all tx to check by traversing the tangle
-	// Loop as long as new transactions are added in every loop cycle
-	for len(txsToTraverse) != 0 {
-
-		for txHash := range txsToTraverse {
-			delete(txsToTraverse, txHash)
-
-			if _, checked := txsChecked[txHash]; checked {
-				// Tx was already checked => ignore
-				continue
-			}
-			txsChecked[txHash] = struct{}{}
-
-			if tangle.SolidEntryPointsContain(txHash) {
-				// Ignore solid entry points (snapshot milestone included)
-				continue
+			if skipStartTx && bytes.Equal(startTxHash, cachedTxMeta.GetMetadata().GetTxHash()) {
+				// skip the start tx
+				return true, nil
 			}
 
-			cachedTx := tangle.GetCachedTransactionOrNil(txHash) // tx +1
-			if cachedTx == nil {
-				return nil, errors.Wrapf(ErrFindAllTailsFailed, "transaction not found: %v", txHash)
+			if cachedTxMeta.GetMetadata().IsTail() {
+				// transaction is a tail, do not traverse further
+				tails[string(cachedTxMeta.GetMetadata().GetTxHash())] = struct{}{}
+				return false, nil
 			}
 
-			if cachedTx.GetTransaction().IsTail() {
-				tails[txHash] = struct{}{}
-				cachedTx.Release(forceRelease) // tx -1
-				continue
-			}
+			return true, nil
+		},
+		// consumer
+		func(cachedTxMeta *tangle.CachedMetadata) error { // meta +1
+			defer cachedTxMeta.Release(true) // meta -1
+			return nil
+		},
+		// called on missing approvees
+		// return error on missing approvees
+		nil,
+		// called on solid entry points
+		// Ignore solid entry points (snapshot milestone included)
+		nil,
+		forceRelease, false, false, nil)
 
-			// Mark the approvees to be traversed
-			txsToTraverse[cachedTx.GetTransaction().GetTrunk()] = struct{}{}
-			txsToTraverse[cachedTx.GetTransaction().GetBranch()] = struct{}{}
-			cachedTx.Release(forceRelease) // tx -1
-		}
-	}
-	return tails, nil
+	return tails, err
 }
 
 // Predicate defines whether a traversal should continue or not.
-type Predicate func(cachedTx *tangle.CachedTransaction) bool
+type Predicate func(cachedTxMeta *tangle.CachedMetadata) (bool, error)
 
-// Consumer consumes the given transaction during traversal.
-type Consumer func(cachedTx *tangle.CachedTransaction)
+// Consumer consumes the given transaction metadata during traversal.
+type Consumer func(cachedTxMeta *tangle.CachedMetadata) error
 
 // OnMissingApprovee gets called when during traversal an approvee is missing.
-type OnMissingApprovee func(approveeHash trinary.Hash)
+type OnMissingApprovee func(approveeHash hornet.Hash) error
 
-// TraverseApprovees starts to traverse the approvees of the given start transaction until
+// OnSolidEntryPoint gets called when during traversal the startTx or approvee is a solid entry point.
+type OnSolidEntryPoint func(txHash hornet.Hash)
+
+// TraverseApproveesTrunkBranch starts to traverse the approvees (past cone) of the given trunk transaction until
 // the traversal stops due to no more transactions passing the given condition.
-func TraverseApprovees(startTxHash trinary.Hash, condition Predicate, consumer Consumer, onMissingApprovee OnMissingApprovee, forceRelease bool) {
+// Afterwards it traverses the approvees (past cone) of the given branch transaction.
+// It is a DFS with trunk / branch.
+// Caution: condition func is not in DFS order
+func TraverseApproveesTrunkBranch(trunkTxHash hornet.Hash, branchTxHash hornet.Hash, condition Predicate, consumer Consumer, onMissingApprovee OnMissingApprovee, onSolidEntryPoint OnSolidEntryPoint, forceRelease bool, traverseSolidEntryPoints bool, traverseTailsOnly bool, abortSignal <-chan struct{}) error {
 
-	if tangle.SolidEntryPointsContain(startTxHash) {
-		return
-	}
+	t := NewApproveesTraverser(condition, consumer, onMissingApprovee, onSolidEntryPoint, abortSignal)
+	return t.TraverseTrunkAndBranch(trunkTxHash, branchTxHash, traverseSolidEntryPoints, traverseTailsOnly, forceRelease)
+}
 
-	processed := map[trinary.Hash]struct{}{}
-	txsToTraverse := map[trinary.Hash]struct{}{startTxHash: {}}
-	for len(txsToTraverse) != 0 {
-		for txHash := range txsToTraverse {
-			delete(txsToTraverse, txHash)
+// TraverseApprovees starts to traverse the approvees (past cone) of the given start transaction until
+// the traversal stops due to no more transactions passing the given condition.
+// It is a DFS with trunk / branch.
+// Caution: condition func is not in DFS order
+func TraverseApprovees(startTxHash hornet.Hash, condition Predicate, consumer Consumer, onMissingApprovee OnMissingApprovee, onSolidEntryPoint OnSolidEntryPoint, forceRelease bool, traverseSolidEntryPoints bool, traverseTailsOnly bool, abortSignal <-chan struct{}) error {
 
-			cachedTx := tangle.GetCachedTransactionOrNil(txHash) // tx +1
-			if cachedTx == nil {
-				continue
-			}
+	t := NewApproveesTraverser(condition, consumer, onMissingApprovee, onSolidEntryPoint, abortSignal)
+	return t.Traverse(startTxHash, traverseSolidEntryPoints, traverseTailsOnly, forceRelease)
+}
 
-			if txHash != startTxHash && !condition(cachedTx.Retain()) { // tx + 1
-				cachedTx.Release(forceRelease)
-				continue
-			}
+// TraverseApprovers starts to traverse the approvers (future cone) of the given start transaction until
+// the traversal stops due to no more transactions passing the given condition.
+// It is unsorted BFS because the approvers are not ordered in the database.
+func TraverseApprovers(startTxHash hornet.Hash, condition Predicate, consumer Consumer, forceRelease bool, abortSignal <-chan struct{}) error {
 
-			// do not consume the start transaction
-			if txHash != startTxHash {
-				consumer(cachedTx.Retain()) // tx +1
-			}
-
-			approveeHashes := map[trinary.Hash]struct{}{
-				cachedTx.GetTransaction().GetTrunk():  {},
-				cachedTx.GetTransaction().GetBranch(): {},
-			}
-
-			cachedTx.Release(forceRelease) // tx -1
-
-			for approveeHash := range approveeHashes {
-				if tangle.SolidEntryPointsContain(approveeHash) {
-					continue
-				}
-
-				if _, checked := processed[approveeHash]; checked {
-					continue
-				}
-
-				processed[approveeHash] = struct{}{}
-
-				cachedApproveeTx := tangle.GetCachedTransactionOrNil(approveeHash) // approvee +1
-				if cachedApproveeTx == nil {
-					onMissingApprovee(approveeHash)
-					continue
-				}
-
-				// do not force release since it is loaded again
-				cachedApproveeTx.Release() // approvee -1
-
-				txsToTraverse[approveeHash] = struct{}{}
-			}
-		}
-	}
+	t := NewApproversTraverser(condition, consumer, abortSignal)
+	return t.Traverse(startTxHash, forceRelease)
 }

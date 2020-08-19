@@ -22,6 +22,9 @@ comnetdb/
 .DS_Store
 /hornet
 
+# snapshot dir
+snapshots/
+
 # snapshot files
 *export.bin
 *export_comnet.bin
@@ -42,6 +45,6 @@ hornet.log
 
 # coordinator files
 layer*.csv
-coordinator.state
-coordinator.tree
+./coordinator.state
+./coordinator.tree
 hive.go/

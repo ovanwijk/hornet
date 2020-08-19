@@ -1,20 +1,14 @@
 package processor
 
 import (
-	"bytes"
-
 	"github.com/iotaledger/hive.go/objectstorage"
 	"github.com/iotaledger/hive.go/syncutils"
-	"github.com/iotaledger/iota.go/consts"
-	"github.com/iotaledger/iota.go/trinary"
 
 	"github.com/gohornet/hornet/pkg/metrics"
 	"github.com/gohornet/hornet/pkg/model/hornet"
-	"github.com/gohornet/hornet/pkg/model/tangle"
 	"github.com/gohornet/hornet/pkg/peering/peer"
 	"github.com/gohornet/hornet/pkg/protocol/bqueue"
-	"github.com/gohornet/hornet/pkg/protocol/legacy"
-	"github.com/gohornet/hornet/pkg/protocol/rqueue"
+	"github.com/gohornet/hornet/plugins/peering"
 )
 
 // WorkUnitState defines the state which a WorkUnit is in.
@@ -30,9 +24,8 @@ const (
 func workUnitFactory(key []byte) (objectstorage.StorableObject, int, error) {
 	req := &WorkUnit{
 		receivedTxBytes: make([]byte, len(key)),
-		requests:        make([]*Request, 0),
+		receivedFrom:    make([]*peer.Peer, 0),
 	}
-	// TODO: check for a more efficient key instead of copying all tx bytes
 	copy(req.receivedTxBytes, key)
 	return req, len(key), nil
 }
@@ -55,19 +48,19 @@ type WorkUnit struct {
 	processingLock syncutils.Mutex
 
 	// data
-	dataLock            syncutils.RWMutex
-	receivedTxBytes     []byte
-	receivedTxHashBytes []byte
-	receivedTxHash      trinary.Hash
-	tx                  *hornet.Transaction
+	dataLock        syncutils.RWMutex
+	receivedTxBytes []byte
+	receivedTxHash  hornet.Hash
+	tx              *hornet.Transaction
+	wasStale        bool
 
 	// status
 	stateLock syncutils.RWMutex
 	state     WorkUnitState
 
-	// requests
-	requestsLock syncutils.RWMutex
-	requests     []*Request
+	// received from
+	receivedFromLock syncutils.RWMutex
+	receivedFrom     []*peer.Peer
 }
 
 func (wu *WorkUnit) Update(_ objectstorage.StorableObject) {
@@ -104,128 +97,63 @@ func (wu *WorkUnit) Is(state WorkUnitState) bool {
 // adds a Request for the given peer to this WorkUnit.
 // requestedTxHashBytes can be nil to flag that this request just reflects a receive from the given
 // peer and has no associated request.
-func (wu *WorkUnit) addRequest(p *peer.Peer, requestedTxHashBytes []byte) {
-	wu.requestsLock.Lock()
-	defer wu.requestsLock.Unlock()
-	wu.requests = append(wu.requests, &Request{
-		p:                    p,
-		requestedTxHashBytes: requestedTxHashBytes,
-	})
-}
-
-// replies to all requests within this WorkUnit.
-func (wu *WorkUnit) replyToAllRequests(requestQueue rqueue.Queue) {
-	wu.requestsLock.Lock()
-	defer wu.requestsLock.Unlock()
-
-	if len(wu.requests) == 0 {
-		return
-	}
-
-	for _, peerRequest := range wu.requests {
-		// this request might simply just represent that we received the underlying
-		// WorkUnit's transaction from the given peer
-		if peerRequest.Empty() {
-			continue
-		}
-
-		// if requested transaction hash is equal to the hash of the received transaction
-		// it means that the given peer is synchronized
-		isPeerSynced := bytes.Equal(wu.receivedTxHashBytes, peerRequest.requestedTxHashBytes)
-		request := requestQueue.Next()
-
-		// if the peer is synced  and we have no request ourselves,
-		// we don't need to reply
-		if isPeerSynced && request == nil {
-			continue
-		}
-
-		var cachedTxToSend *tangle.CachedTransaction
-
-		// load requested transaction
-		if !isPeerSynced {
-			requestedTxHash, err := trinary.BytesToTrytes(peerRequest.requestedTxHashBytes, 81)
-			if err != nil {
-				peerRequest.p.Metrics.InvalidRequests.Inc()
-				metrics.SharedServerMetrics.InvalidRequests.Inc()
-				continue
-			}
-
-			cachedTxToSend = tangle.GetCachedTransactionOrNil(requestedTxHash) // tx +1
-		}
-
-		if cachedTxToSend == nil {
-			if request == nil {
-				// we don't reply since we don't have the requested transaction
-				// and neither something ourselves we need to request
-				continue
-			}
-
-			// to keep up the ping-pong between peers which communicate with only
-			// legacy messages, we send as our answer to the requested transaction
-			// the genesis transaction, to still reply with an own needed transaction request.
-
-			cachedGenesisTx := tangle.GetCachedTransactionOrNil(consts.NullHashTrytes) // tx +1
-			if cachedGenesisTx == nil {
-				panic("genesis transaction not installed")
-			}
-
-			cachedTxToSend = cachedGenesisTx
-		}
-
-		// if we have no request ourselves, we use the hash of the transaction which we
-		// send in order to signal that we are synchronized.
-		var ownRequestHash []byte
-		if request == nil {
-			var err error
-			ownRequestHash, err = trinary.TrytesToBytes(cachedTxToSend.GetTransaction().GetHash())
-			if err != nil {
-				cachedTxToSend.Release(true) // tx -1
-				continue
-			}
-		} else {
-			ownRequestHash = request.HashBytesEncoded
-		}
-		transactionAndRequestMsg, _ := legacy.NewTransactionAndRequestMessage(cachedTxToSend.GetTransaction().RawBytes, ownRequestHash)
-		cachedTxToSend.Release(true) // tx -1
-		peerRequest.p.EnqueueForSending(transactionAndRequestMsg)
-	}
-
-	// We processed all the replies, so forget the requests
-	wu.requests = []*Request{}
+func (wu *WorkUnit) addReceivedFrom(p *peer.Peer, requestedTxHash hornet.Hash) {
+	wu.receivedFromLock.Lock()
+	defer wu.receivedFromLock.Unlock()
+	wu.receivedFrom = append(wu.receivedFrom, p)
 }
 
 // punishes, respectively increases the invalid transaction metric of all peers
 // which sent the given underlying transaction of this WorkUnit.
+// it also closes the connection to these peers.
 func (wu *WorkUnit) punish() {
-	wu.requestsLock.Lock()
-	defer wu.requestsLock.Unlock()
-	for _, r := range wu.requests {
-		r.Punish()
+	wu.receivedFromLock.Lock()
+	defer wu.receivedFromLock.Unlock()
+	for _, p := range wu.receivedFrom {
+		metrics.SharedServerMetrics.InvalidTransactions.Inc()
+
+		// drop the connection to the peer
+		peering.Manager().Remove(p.ID)
 	}
 }
 
 // increases the stale transaction metric of all peers
 // which sent the given underlying transaction of this WorkUnit.
 func (wu *WorkUnit) stale() {
-	wu.requestsLock.Lock()
-	defer wu.requestsLock.Unlock()
-	for _, r := range wu.requests {
-		r.Stale()
+	wu.receivedFromLock.Lock()
+	defer wu.receivedFromLock.Unlock()
+	for _, p := range wu.receivedFrom {
+		metrics.SharedServerMetrics.StaleTransactions.Inc()
+		p.Metrics.StaleTransactions.Inc()
 	}
 }
 
 // builds a Broadcast where all peers which are associated with this WorkUnit are excluded from.
 func (wu *WorkUnit) broadcast() *bqueue.Broadcast {
-	wu.requestsLock.Lock()
-	defer wu.requestsLock.Unlock()
+	wu.receivedFromLock.Lock()
+	defer wu.receivedFromLock.Unlock()
 	exclude := map[string]struct{}{}
-	for _, req := range wu.requests {
-		exclude[req.p.ID] = struct{}{}
+	for _, p := range wu.receivedFrom {
+		exclude[p.ID] = struct{}{}
 	}
 	return &bqueue.Broadcast{
-		ByteEncodedTxData:          wu.receivedTxBytes,
-		ByteEncodedRequestedTxHash: wu.receivedTxHashBytes,
-		ExcludePeers:               exclude,
+		TxData:          wu.receivedTxBytes,
+		RequestedTxHash: wu.receivedTxHash,
+		ExcludePeers:    exclude,
+	}
+}
+
+// increases the known transaction metric of all peers
+// except the given peer
+func (wu *WorkUnit) increaseKnownTxCount(excludedPeer *peer.Peer) {
+	wu.receivedFromLock.Lock()
+	defer wu.receivedFromLock.Unlock()
+
+	for _, p := range wu.receivedFrom {
+		if p.ID == excludedPeer.ID {
+			continue
+		}
+		metrics.SharedServerMetrics.KnownTransactions.Inc()
+		p.Metrics.KnownTransactions.Inc()
 	}
 }

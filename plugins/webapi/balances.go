@@ -10,6 +10,7 @@ import (
 
 	"github.com/iotaledger/iota.go/address"
 
+	"github.com/gohornet/hornet/pkg/model/hornet"
 	"github.com/gohornet/hornet/pkg/model/tangle"
 )
 
@@ -63,7 +64,7 @@ func getBalances(i interface{}, c *gin.Context, _ <-chan struct{}) {
 
 	for _, addr := range query.Addresses {
 
-		balance, _, err := tangle.GetBalanceForAddressWithoutLocking(addr[:81])
+		balance, _, err := tangle.GetBalanceForAddressWithoutLocking(hornet.HashFromAddressTrytes(addr))
 		if err != nil {
 			e.Error = "Ledger state invalid"
 			c.JSON(http.StatusInternalServerError, e)
@@ -76,6 +77,6 @@ func getBalances(i interface{}, c *gin.Context, _ <-chan struct{}) {
 
 	// The index of the milestone that confirmed the most recent balance
 	result.MilestoneIndex = cachedLatestSolidMs.GetBundle().GetMilestoneIndex()
-	result.References = []string{cachedLatestSolidMs.GetBundle().GetMilestoneHash()}
+	result.References = []string{cachedLatestSolidMs.GetBundle().GetMilestoneHash().Trytes()}
 	c.JSON(http.StatusOK, result)
 }
