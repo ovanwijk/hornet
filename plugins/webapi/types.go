@@ -461,15 +461,15 @@ type AddressWithBalance struct {
 
 // GetFindPath struct
 type GetFindPath struct {
-	Command   string         `mapstructure:"command"`
-	Endpoints []trinary.Hash `mapstructure:"endpoints"`
-	Start     trinary.Hash   `mapstructure:"start"`
+	Command   string           `mapstructure:"command"`
+	Endpoints []trinary.Trytes `mapstructure:"endpoints"`
+	Start     trinary.Trytes   `mapstructure:"start"`
 }
 
 // GetFindPathReturn struct
 type GetFindPathReturn struct {
-	Transactions []trinary.Hash `json:"transactions"`
-	Branches     [][]int        `json:"branches"`
-	Trunks       [][]int        `json:"trunks"`
-	Duration     int            `json:"duration"`
+	Transactions []trinary.Trytes `json:"transactions"`
+	Branches     [][]int          `json:"branches"`
+	Trunks       [][]int          `json:"trunks"`
+	Duration     int              `json:"duration"`
 }

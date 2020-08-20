@@ -19,21 +19,21 @@ var (
 
 )
 
-func FindPaths(start trinary.Hash, endpoints []trinary.Hash) ([]string, [][]int, [][]int, string) {
+func FindPaths(start hornet.Hash, endpoints []trinary.Trytes) ([]string, [][]int, [][]int, string) {
 	cachedStart := tangle.GetCachedTransactionOrNil(start)
 	startTx := *cachedStart.GetTransaction()
 	sortedEndpoints := make([]ApproveeStep, 0)
 	for i := 0; i < len(endpoints); i++ {
-		cachedTx := tangle.GetCachedTransactionOrNil(endpoints[i])
+		cachedTx := tangle.GetCachedTransactionOrNil(hornet.HashFromHashTrytes(endpoints[i]))
 		tx := *cachedTx.GetTransaction()
 		sortedEndpoints = insertSorted(sortedEndpoints, ApproveeStep{
 			0,
 			"",
 			newestTimestamp(&tx),
 			newestTimestamp(&tx),
-			tx.GetHash(),
-			tx.GetBranch(),
-			tx.GetTrunk(),
+			tx.GetTxHash().Trytes(),
+			tx.GetBranchHash().Trytes(),
+			tx.GetTrunkHash().Trytes(),
 		})
 		cachedTx.Release(true)
 
@@ -53,9 +53,9 @@ func FindPaths(start trinary.Hash, endpoints []trinary.Hash) ([]string, [][]int,
 		"",
 		newestTimestamp(&startTx),
 		newestTimestamp(&startTx),
-		startTx.GetHash(),
-		startTx.GetBranch(),
-		startTx.GetTrunk(),
+		startTx.GetTxHash().Trytes(),
+		startTx.GetBranchHash().Trytes(),
+		startTx.GetTrunkHash().Trytes(),
 	})
 
 	indexCounter := 0
@@ -110,7 +110,7 @@ func WalkTangle(callQueue []ApproveeStep, overReachQueue []ApproveeStep, endpoin
 		currentTx := ApproveeStep{}
 		currentTx, callQueue = callQueue[0], callQueue[1:]
 		currentStep := currentTx.Step
-		trunkAndBranch := []trinary.Hash{currentTx.Trunk, currentTx.Branch}
+		trunkAndBranch := []string{currentTx.Trunk, currentTx.Branch}
 
 		for i := 0; i < 2; i++ {
 			if foundTx, txFound := localTangle[trunkAndBranch[i]]; txFound {
@@ -120,7 +120,7 @@ func WalkTangle(callQueue []ApproveeStep, overReachQueue []ApproveeStep, endpoin
 				}
 			} else {
 
-				cachedTx := tangle.GetCachedTransactionOrNil(trunkAndBranch[i])
+				cachedTx := tangle.GetCachedTransactionOrNil(hornet.HashFromHashTrytes(trunkAndBranch[i]))
 				if cachedTx != nil {
 					tx := *cachedTx.GetTransaction()
 
@@ -129,9 +129,9 @@ func WalkTangle(callQueue []ApproveeStep, overReachQueue []ApproveeStep, endpoin
 						currentTx.TX,
 						newestTimestamp(&tx),
 						newestTimestamp(&tx) - (currentTx.Timestamp - newestTimestamp(&tx)),
-						tx.GetHash(),
-						tx.GetBranch(),
-						tx.GetTrunk(),
+						tx.GetTxHash().Trytes(),
+						tx.GetBranchHash().Trytes(),
+						tx.GetTrunkHash().Trytes(),
 					}
 
 					if stepTx.Timestamp > lowestTimestamp-300 {
@@ -142,13 +142,13 @@ func WalkTangle(callQueue []ApproveeStep, overReachQueue []ApproveeStep, endpoin
 
 					pathRef := PathReference{
 						currentTx.TX,
-						tx.GetHash(),
+						tx.GetTxHash().Trytes(),
 						i == 0,
 						currentStep + 1,
-						tx.GetBranch(),
-						tx.GetTrunk(),
+						tx.GetBranchHash().Trytes(),
+						tx.GetTrunkHash().Trytes(),
 					}
-					localTangle[tx.GetHash()] = pathRef
+					localTangle[tx.GetTxHash().Trytes()] = pathRef
 
 					cachedTx.Release(true)
 
@@ -164,22 +164,22 @@ func WalkTangle(callQueue []ApproveeStep, overReachQueue []ApproveeStep, endpoin
 }
 
 type PathReference struct {
-	ShortestPath trinary.Hash
-	TxID         trinary.Hash
+	ShortestPath string
+	TxID         string
 	ToB          bool
 	Step         int64
-	Branch       trinary.Hash
-	Trunk        trinary.Hash
+	Branch       string
+	Trunk        string
 }
 
 type ApproveeStep struct {
 	Step       int64
-	Approvee   trinary.Hash
+	Approvee   string
 	Timestamp  int64
 	Projection int64
-	TX         trinary.Hash
-	Branch     trinary.Hash
-	Trunk      trinary.Hash
+	TX         string
+	Branch     string
+	Trunk      string
 }
 
 func newestTimestamp(tx *hornet.Transaction) int64 {
